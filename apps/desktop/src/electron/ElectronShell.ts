@@ -42,6 +42,14 @@ const isRemoteEditorUrl = (url: URL) =>
         url.pathname.startsWith("/ssh-remote+") &&
         url.pathname.length > "/ssh-remote+".length);
 
+// Fork: the Diffy app opens GitHub pull requests from diffy://github.com/<owner>/<repo>/pull/<n>.
+const isDiffyPullRequestUrl = (url: URL) =>
+  url.protocol === "diffy:" &&
+  url.host === "github.com" &&
+  url.username.length === 0 &&
+  url.password.length === 0 &&
+  /^\/[^/]+\/[^/]+\/pull\/\d+(?:\/|$)/.test(url.pathname);
+
 export function parseSafeExternalUrl(rawUrl: unknown): Option.Option<string> {
   if (typeof rawUrl !== "string") {
     return Option.none();
@@ -52,7 +60,8 @@ export function parseSafeExternalUrl(rawUrl: unknown): Option.Option<string> {
     return SAFE_WEB_PROTOCOLS.has(url.protocol) ||
       APP_LAUNCH_URLS.has(url.href) ||
       isRemoteEditorUrl(url) ||
-      isLocalEditorFileUrl(url)
+      isLocalEditorFileUrl(url) ||
+      isDiffyPullRequestUrl(url)
       ? Option.some(url.href)
       : Option.none();
   } catch {
