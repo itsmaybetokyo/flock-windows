@@ -66,7 +66,10 @@ import * as OpenCodeRuntime from "../OpenCodeRuntime.ts";
 import { readableProviderErrorMessage } from "../providerErrorMessage.ts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
-import { t3OrchestrationSystemPrompt } from "@t3tools/provider-core/server/orchestrationInstructions";
+import {
+  hasT3Memory,
+  t3OrchestrationSystemPrompt,
+} from "@t3tools/provider-core/server/orchestrationInstructions";
 import { SKILL_MENTION_PATTERN } from "@t3tools/shared/composerInlineTokens";
 import { compareSemverVersions } from "@t3tools/shared/semver";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
@@ -4090,7 +4093,11 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       }
       const instructions = [
         buildRuntimeInstructions({ harness: "OpenCode", model: turnInput.modelSelection.model }),
-        t3OrchestrationSystemPrompt(mcpAvailable, mcpSession?.capabilities?.has("device") === true),
+        t3OrchestrationSystemPrompt(
+          mcpAvailable,
+          mcpSession?.capabilities?.has("device") === true,
+          hasT3Memory(mcpSession),
+        ),
       ]
         .filter((part) => part !== undefined && part.length > 0)
         .join("\n\n");
