@@ -39,6 +39,7 @@ import { LocalEnvironmentSetting } from "./LocalEnvironmentSetting";
 import { searchableSetting } from "./settingsSearch";
 import { EnvironmentIconMenu } from "./EnvironmentIconPicker";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
+import { ConnectionTimingsSection } from "./ConnectionTimingsSection"; // temp: connection timings
 import { LinkedEnvironmentsSettings } from "./LinkedEnvironmentsSettings";
 import { usePeerLinkHosts } from "~/state/peerLinks";
 import { LoadBalancingSettings } from "./LoadBalancingSettings";
@@ -1560,6 +1561,8 @@ export function ConnectionsSettings({ view }: { readonly view: "environments" | 
       ))}
       <LoadBalancingSettings environments={loadBalancingEnvironments} />
       <PullRequestRoutingSettings environments={loadBalancingEnvironments} />
+      {/* temp: connection timings */}
+      <ConnectionTimingsSection />
     </SettingsPageContainer>
   );
 }
