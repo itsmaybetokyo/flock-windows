@@ -1,5 +1,12 @@
 name: Sync upstream
 
+# This repo is a fork of a fork: seatedro/t3code is the upstream we follow.
+# Every run fast-forwards `main` to upstream and merges upstream's
+# `rohit/changes` into ours. Conflicting hunks keep the fork's version
+# (`-X ours`), which is exactly the set of files this fork intentionally
+# changes (the Windows release pipeline), so the merge never fails on them.
+# A push to `rohit/changes` then triggers the Windows release build.
+
 on:
   schedule:
     - cron: "0 13 * * *"
@@ -8,7 +15,6 @@ on:
 permissions:
   actions: write
   contents: write
-  pull-requests: write
 
 concurrency:
   group: sync-upstream
@@ -18,6 +24,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       REPO: ${{ github.repository }}
+      UPSTREAM: seatedro/t3code
+      BRANCH: rohit/changes
       # fork-release.yml calls release-desktop.yml, so both stay enabled.
       KEEP: .github/workflows/sync-upstream.yml .github/workflows/fork-release.yml .github/workflows/release-desktop.yml
     steps:
@@ -29,26 +37,55 @@ jobs:
             --jq '(env.KEEP | split(" ")) as $keep | .[] | select(.state == "active" and (.path | IN($keep[]) | not)) | .id' |
             xargs -r -n1 gh workflow disable --repo "$REPO"
 
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.BRANCH }}
+          fetch-depth: 0
+          # SYNC_TOKEN carries the `workflow` scope a merge of upstream
+          # workflow files needs, which the default token lacks.
+          token: ${{ secrets.SYNC_TOKEN || github.token }}
+
       - name: Fast-forward main from upstream
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh repo sync "$REPO" --branch main --source pingdotgg/t3code
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN || github.token }}
+        run: gh repo sync "$REPO" --branch main --source "$UPSTREAM"
+
+      - name: Merge upstream into the fork branch
+        id: merge
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream "https://github.com/$UPSTREAM.git" || true
+          git fetch --no-tags upstream "$BRANCH"
+          if git merge-base --is-ancestor FETCH_HEAD HEAD; then
+            echo "Already up to date with $UPSTREAM $BRANCH."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git merge --no-edit -X ours FETCH_HEAD
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          git log --oneline -1
+
+      # A bad merge of upstream's YAML would break the release pipeline
+      # silently, so refuse to push one.
+      - name: Validate workflow YAML
+        if: steps.merge.outputs.changed == 'true'
+        run: |
+          python3 - <<'PY'
+          import glob, sys, yaml
+          for path in glob.glob(".github/workflows/*.yml"):
+              with open(path, encoding="utf-8") as handle:
+                  yaml.safe_load(handle)
+          print("workflow YAML OK")
+          PY
+
+      - name: Push the synced branch
+        if: steps.merge.outputs.changed == 'true'
+        run: git push origin "HEAD:${{ env.BRANCH }}"
 
       - name: Disable newly added upstream workflows
         env:
           GH_TOKEN: ${{ github.token }}
         run: *disable
-
-      - name: Open sync PR
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          behind=$(gh api "repos/$REPO/compare/rohit/changes...main" --jq .ahead_by)
-          echo "rohit/changes is $behind commits behind main"
-          [ "$behind" -gt 0 ] || exit 0
-          open=$(gh pr list --repo "$REPO" --head main --base rohit/changes --state open --json number --jq length)
-          [ "$open" -eq 0 ] || exit 0
-          gh pr create --repo "$REPO" --head main --base rohit/changes \
-            --title "Sync upstream main" \
-            --body "Upstream \`pingdotgg/t3code\` main has $behind new commits. Rebase \`rohit/changes\` onto \`main\` and force-push; this PR closes as merged once \`rohit/changes\` contains \`main\`." \
-            || echo "::warning::main is synced, but this repo does not allow Actions to open pull requests. Enable 'Allow GitHub Actions to create and approve pull requests' in Settings > Actions > General, or open the sync PR by hand."
