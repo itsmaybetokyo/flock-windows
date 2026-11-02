@@ -2387,6 +2387,7 @@ describe("OrchestratorMcpService provider resolution", () => {
             Layer.mergeAll(
               NodeServices.layer,
               Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+              Layer.mock(RemoteDelegation.RemoteDelegation)({}),
               ServerSettings.layerTest(),
               Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
               Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({

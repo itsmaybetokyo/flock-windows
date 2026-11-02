@@ -48,6 +48,14 @@ interface UpdateEverythingDialogProps {
   readonly restarts: ReadonlyArray<RestartingMachine>;
   readonly onConfirm: () => void;
   readonly onConfirmAppOnly?: () => void;
+  /** Overrides the "Update N machines?" title, for an update-track switch. */
+  readonly title?: string;
+  readonly confirmLabel?: string;
+  readonly notes?: ReadonlyArray<string>;
+  /** Shown in place of running-thread counts; disables the confirm button. */
+  readonly disabledReason?: string | null;
+  /** The confirmed work is starting; it cannot be cancelled from here. */
+  readonly busy?: boolean;
 }
 
 type UpdateEverythingDialogContentProps = Omit<
@@ -90,7 +98,13 @@ function UpdateEverythingDialogContent({
   restarts,
   onConfirm,
   onConfirmAppOnly,
-}: Omit<UpdateEverythingDialogProps, "open" | "onOpenChange">) {
+  cancelRef,
+  title,
+  confirmLabel = "Update",
+  notes = [],
+  disabledReason = null,
+  busy = false,
+}: UpdateEverythingDialogContentProps) {
   const stopped = useAtomValue(
     runningThreadCountAtom(
       restarts
@@ -223,15 +237,9 @@ function UpdateEverythingDialogContent({
             Only this app
           </Button>
         ) : null}
-      </AlertDialogHeader>
-      <AlertDialogFooter>
-        <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
-        {onConfirmAppOnly ? (
-          <Button variant="outline" onClick={onConfirmAppOnly}>
-            Only this app
-          </Button>
-        ) : null}
-        <Button onClick={onConfirm}>Update</Button>
+        <Button disabled={disabledReason !== null || busy} onClick={onConfirm}>
+          {confirmLabel}
+        </Button>
       </AlertDialogFooter>
     </>
   );
