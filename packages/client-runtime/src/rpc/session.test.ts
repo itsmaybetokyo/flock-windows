@@ -21,6 +21,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as Socket from "effect/socket/Socket";
+import { deflatingJson } from "@t3tools/shared/rpcFrameDeflate";
 
 import {
   AVAILABLE_CONNECTION_STATE,
@@ -89,7 +90,7 @@ class TestWebSocket {
     this.emit("open", { type: "open" });
   }
 
-  serverMessage(data: string) {
+  serverMessage(data: string | Uint8Array) {
     this.emit("message", { data, type: "message" });
   }
 
@@ -198,16 +199,6 @@ const SOURCE_EVENT: ServerConfigStreamEventType = {
   },
 };
 
-const LEGACY_SERVER_CONFIG = {
-  ...ENCODED_SERVER_CONFIG,
-  environment: {
-    ...ENCODED_SERVER_CONFIG.environment,
-    capabilities: {
-      repositoryIdentity: true,
-    },
-  },
-};
-
 const makeFactory = Effect.fn("TestRpcSessionFactory.make")(function* (
   options: RpcSession.RpcSessionOptions = {},
 ) {
@@ -292,7 +283,7 @@ describe("RpcSessionFactory", () => {
       const readyFiber = yield* Effect.forkChild(session.ready);
       const socket = yield* awaitSocket(sockets);
 
-      expect(socket.url).toBe(PREPARED.socketUrl);
+      expect(socket.url).toBe(`${PREPARED.socketUrl}&frameCompression=deflate`);
       socket.open();
       yield* completeInitialConfig(socket);
       yield* Fiber.join(readyFiber);
@@ -343,6 +334,42 @@ describe("RpcSessionFactory", () => {
       expect(configStreamError).toMatchObject({ _tag: "RpcClientError" });
       yield* Effect.yieldNow;
       expect(sockets).toHaveLength(1);
+    }),
+  );
+
+  it.effect("reads the frames a server deflates for sockets without permessage-deflate", () =>
+    Effect.gen(function* () {
+      const { factory, sockets } = yield* makeFactory();
+      const session = yield* factory.connect(PREPARED);
+      const socket = yield* awaitSocket(sockets);
+      socket.open();
+      const server = deflatingJson.makeUnsafe();
+      const deflated = (message: unknown) => {
+        const frame = server.encode(message);
+        if (!(frame instanceof Uint8Array)) throw new Error("expected a binary frame");
+        return frame;
+      };
+      const configRequest = yield* awaitRequest(socket);
+      socket.serverMessage(
+        deflated({
+          _tag: "Chunk",
+          requestId: configRequest.id,
+          values: [{ version: 1, type: "snapshot", config: ENCODED_SERVER_CONFIG }],
+        }),
+      );
+      expect(yield* session.initialConfig).toEqual(SERVER_CONFIG);
+
+      // The second frame back-references the first through the shared window.
+      const probeFiber = yield* Effect.forkChild(session.probe);
+      const probeRequest = yield* awaitRequest(socket, 1);
+      socket.serverMessage(
+        deflated({
+          _tag: "Exit",
+          requestId: probeRequest.id,
+          exit: { _tag: "Success", value: {} },
+        }),
+      );
+      yield* Fiber.join(probeFiber);
     }),
   );
 
@@ -446,7 +473,7 @@ describe("RpcSessionFactory", () => {
   it.effect.each([
     { usageLimitSources: true },
     { environmentThemes: true, usageLimitSources: true },
-  ])("replays usage sources, removal, and capability downgrade with %j", (options) =>
+  ])("replays usage sources and removal with %j", (options) =>
     Effect.scoped(
       Effect.gen(function* () {
         const { factory, sockets } = yield* makeFactory(options);
@@ -473,7 +500,6 @@ describe("RpcSessionFactory", () => {
           SOURCE_EVENT,
           { version: 1, type: "usageLimitSourcesUpdated", payload: { sources: [] } },
           SOURCE_EVENT,
-          { version: 1, type: "snapshot", config: THEME_SERVER_CONFIG },
         ];
         for (const event of events) {
           yield* publishConfigEvents(socket, [event]);
@@ -494,11 +520,7 @@ describe("RpcSessionFactory", () => {
           yield* publishConfigEvents(socket, [marker]);
           expect(yield* Queue.take(observed)).toEqual(marker);
           const replayed = Array.from(yield* Fiber.join(replay));
-          expect(replayed.slice(1)).toEqual([
-            ...themes,
-            ...(event.type === "snapshot" ? [] : [event]),
-            marker,
-          ]);
+          expect(replayed.slice(1)).toEqual([...themes, event, marker]);
           let projection = applyServerConfigProjection(Option.none(), {
             version: 1,
             type: "snapshot",
@@ -1019,46 +1041,5 @@ describe("RpcSessionFactory", () => {
       expect(config.issues).toEqual([]);
       expect(config.availableEditors).toEqual(["zed"]);
     }),
-  );
-
-  it.effect("uses the legacy config RPC for probes when the server lacks the capability", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { factory, sockets } = yield* makeFactory();
-        const session = yield* factory.connect(PREPARED);
-        const readyFiber = yield* Effect.forkChild(session.ready);
-        const socket = yield* awaitSocket(sockets);
-
-        socket.open();
-        yield* completeInitialConfig(socket, LEGACY_SERVER_CONFIG);
-        yield* Fiber.join(readyFiber);
-
-        const probeFiber = yield* Effect.forkChild(session.probe);
-        const probeRequest = yield* awaitRequest(socket, 1);
-        expect(probeRequest).toMatchObject({
-          _tag: "Request",
-          tag: WS_METHODS.serverGetConfig,
-          payload: {},
-        });
-        socket.serverMessage(
-          encodeJson({
-            _tag: "Exit",
-            requestId: probeRequest.id,
-            exit: {
-              _tag: "Success",
-              value: LEGACY_SERVER_CONFIG,
-            },
-          }),
-        );
-        yield* Fiber.join(probeFiber);
-
-        expect(
-          socket.sent
-            .map((message) => decodeJson(message))
-            .filter(isRpcRequest)
-            .map((request) => request.tag),
-        ).toEqual([WS_METHODS.subscribeServerConfig, WS_METHODS.serverGetConfig]);
-      }),
-    ),
   );
 });

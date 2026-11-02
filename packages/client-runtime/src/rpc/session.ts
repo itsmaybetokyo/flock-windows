@@ -24,6 +24,7 @@ import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcClientError from "effect/rpc/RpcClientError";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Socket from "effect/socket/Socket";
+import { inflatingJson, withFrameCompressionRequest } from "@t3tools/shared/rpcFrameCompression";
 
 import { makeWsRpcProtocolClient, PING_TIMEOUT, type WsRpcProtocolClient } from "./protocol.ts";
 import { NETWORK_BLOCKING_HINT, UNRESPONSIVE_HOST_HINT } from "../errors/network.ts";
@@ -42,6 +43,7 @@ import {
   withoutEnvironmentThemes,
 } from "../state/serverConfigProjection.ts";
 import { environmentMismatchError } from "../connection/errors.ts";
+import * as ConnectionTimings from "../connection/timings.ts"; // temp: connection timings
 
 const SOCKET_OPEN_TIMEOUT = "15 seconds";
 
@@ -62,6 +64,10 @@ export interface RpcSessionOptions {
   readonly environmentThemes?: boolean;
   readonly usageLimitSources?: boolean;
   readonly usageLimitsCommand?: boolean;
+  /** The client has no keyboard shortcuts, so its config skips them. */
+  readonly withoutKeybindings?: boolean;
+  /** The client has no slash command menu, so its config skips provider commands and skills. */
+  readonly withoutProviderCommands?: boolean;
 }
 
 export class RpcSessionFactory extends Context.Service<
@@ -167,14 +173,21 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
   options: RpcSessionOptions = {},
 ) {
   const webSocketConstructor = yield* Socket.WebSocketConstructor;
+  // What this client never reads applies to every config subscription it opens.
+  const clientShape = {
+    ...(options.withoutKeybindings === true ? { withoutKeybindings: true } : {}),
+    ...(options.withoutProviderCommands === true ? { withoutProviderCommands: true } : {}),
+  };
   const serverConfigInput: ServerConfigSubscriptionInput = {
     ...(options.environmentThemes === true ? { environmentThemes: true } : {}),
     ...(options.usageLimitSources === true ? { usageLimitSources: true } : {}),
     ...(options.usageLimitsCommand === true ? { usageLimitsCommand: true } : {}),
+    ...clientShape,
   };
   // Config state merges the snapshots it fetches back in, so no subscriber needs them broadcast.
   const onDemandSnapshots = (input: ServerConfigSubscriptionInput) => ({
     ...input,
+    ...clientShape,
     workspaceSnapshotsOnDemand: true,
   });
 
@@ -223,7 +236,8 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
       });
       return socket;
     };
-    const layerSocket = Socket.layerWebSocket(connection.socketUrl, {
+    // Servers deflate frames themselves only for sockets that offered no permessage-deflate.
+    const layerSocket = Socket.layerWebSocket(withFrameCompressionRequest(connection.socketUrl), {
       openTimeout: SOCKET_OPEN_TIMEOUT,
     }).pipe(
       Layer.provide(Layer.succeed(Socket.WebSocketConstructor, countingWebSocketConstructor)),
@@ -240,7 +254,7 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
       Layer.provide(
         Layer.mergeAll(
           layerSocket,
-          RpcSerialization.layerJson,
+          Layer.succeed(RpcSerialization.RpcSerialization, inflatingJson),
           Layer.succeed(RpcClient.ConnectionHooks, hooks),
         ),
       ),
@@ -251,6 +265,7 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
     // Building the protocol only starts the socket; this span times the
     // handshake up to the first open, without making `connect` wait for it.
     yield* Deferred.await(connected).pipe(
+      Effect.andThen(ConnectionTimings.markSocketOpen), // temp: connection timings
       Effect.raceFirst(Deferred.await(disconnected)),
       Effect.withSpan("environment.websocket.open"),
       Effect.ignore,
@@ -288,17 +303,11 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
               themesEvent:
                 event.type === "environmentThemesUpdated"
                   ? event
-                  : event.type === "snapshot" &&
-                      event.config.environment.capabilities.environmentThemes !== true
-                    ? undefined
-                    : Option.getOrUndefined(current)?.themesEvent,
+                  : Option.getOrUndefined(current)?.themesEvent,
               sourcesEvent:
                 event.type === "usageLimitSourcesUpdated"
                   ? event
-                  : event.type === "snapshot" &&
-                      event.config.environment.capabilities.usageLimitSources !== true
-                    ? undefined
-                    : Option.getOrUndefined(current)?.sourcesEvent,
+                  : Option.getOrUndefined(current)?.sourcesEvent,
             } satisfies ServerConfigReplayState;
             return [
               Option.some({ event, replay: next, revision: next.revision }),
@@ -404,18 +413,15 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
       Stream.unwrap(
         validatedInitialConfig.pipe(
           Effect.as(
-            Equal.equals(input, serverConfigInput)
+            Equal.equals({ ...input, ...clientShape }, serverConfigInput)
               ? serverConfigEvents
               : protocolClient[WS_METHODS.subscribeServerConfig](onDemandSnapshots(input)),
           ),
         ),
       );
     const probe = initialConfig.pipe(
-      Effect.flatMap((config) =>
-        (config.environment.capabilities.connectionProbe === true
-          ? protocolClient[WS_METHODS.serverProbe]({})
-          : protocolClient[WS_METHODS.serverGetConfig]({})
-        ).pipe(Effect.mapError(mapRpcError)),
+      Effect.flatMap(() =>
+        protocolClient[WS_METHODS.serverProbe]({}).pipe(Effect.mapError(mapRpcError)),
       ),
       Effect.asVoid,
       Effect.withSpan("clientRuntime.connection.rpcSession.probe"),

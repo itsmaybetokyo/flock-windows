@@ -33,11 +33,24 @@ export function useEnvironmentScope(
   return sessionHasScope(result, scope);
 }
 
+/** Whether the environment's session holds every scope, such as a settings patch requires. */
+export function useEnvironmentScopes(
+  environmentId: EnvironmentId | null,
+  scopes: ReadonlyArray<AuthEnvironmentScope>,
+): boolean {
+  const result = useAtomValue(
+    environmentId === null
+      ? EMPTY_SESSION_STATE_ATOM
+      : environmentSession.sessionStateAtom(environmentId),
+  );
+  return scopes.every((scope) => sessionHasScope(result, scope));
+}
+
 export function sessionHasScope(
   result: AsyncResult.AsyncResult<AuthSessionState, unknown>,
   scope: AuthEnvironmentScope,
 ): boolean {
-  const session = Option.getOrNull(AsyncResult.value(result));
+  const session = AsyncResult.getOrElse(result, () => null);
   return result._tag !== "Failure" && session !== null && sessionGrantsScope(session, scope);
 }
 
@@ -94,7 +107,7 @@ export function readPreparedConnection(environmentId: EnvironmentId) {
 export function useEnvironmentSessionState(environmentId: EnvironmentId) {
   const result = useAtomValue(environmentSession.sessionStateAtom(environmentId));
   return {
-    data: Option.getOrNull(AsyncResult.value(result)),
+    data: AsyncResult.getOrElse(result, () => null),
     hasError: result._tag === "Failure",
     isPending: result.waiting,
   };

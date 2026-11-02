@@ -13,7 +13,7 @@ import {
   updateOutdatedServer,
 } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { SettingsActionRow } from "./components/SettingsActionRow";
+import { ListActionRow as SettingsActionRow } from "../../components/ui/ListActionRow";
 import { SettingsSection } from "./components/SettingsSection";
 import {
   environmentReleaseCheckAtom,
@@ -88,7 +88,7 @@ export function OutdatedServerUpdateSection({
             : release
               ? release.targetVersion
                 ? `Version ${release.targetVersion} is available.`
-                : "No newer version is available yet."
+                : (release.note ?? "No newer version is available yet.")
               : "This app needs a newer version of T3 Code on this machine."}
         </Text>
         {error || state.status === "failed" ? (

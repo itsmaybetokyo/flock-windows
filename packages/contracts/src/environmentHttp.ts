@@ -13,7 +13,6 @@ import {
   AuthAccessTokenResult,
   AuthBrowserSessionRequest,
   AuthBrowserSessionResult,
-  AuthClientSession,
   AuthCreatePairingCredentialInput,
   AuthMcpApprovalDecisionRequest,
   AuthMcpApprovalDetails,
@@ -29,12 +28,12 @@ import {
   AuthMcpTokenRequest,
   AuthMcpTokenResult,
   AuthPairingCredentialResult,
-  AuthPairingLink,
   AuthRevokeClientSessionInput,
   AuthRevokePairingLinkInput,
   AuthEnvironmentScope,
   AuthTokenExchangeRequest,
   AuthSessionState,
+  AuthTailnetSessionRequest,
   AuthWebSocketTicketParams,
   AuthWebSocketTicketResult,
   ServerAuthSessionMethod,
@@ -58,6 +57,7 @@ import {
   OrchestrationV2ThreadTranscript,
 } from "./orchestrationV2.ts";
 import { Project, ProjectMutation, ProjectSnapshot } from "./project.ts";
+import { TailnetPeersResult } from "./tailnet.ts";
 import {
   PullRequestDiffInput,
   PullRequestDiffResult,
@@ -106,6 +106,10 @@ export type EnvironmentAuthInvalidReason = typeof EnvironmentAuthInvalidReason.T
 
 export const EnvironmentOperationForbiddenReason = Schema.Literals([
   "current_session_revoke_not_allowed",
+  /** This environment does not let tailnet devices in without a pairing code. */
+  "tailnet_trust_disabled",
+  /** The connection did not come over the tailnet from a device of the trusted account. */
+  "tailnet_device_not_trusted",
 ]);
 export type EnvironmentOperationForbiddenReason = typeof EnvironmentOperationForbiddenReason.Type;
 
@@ -126,6 +130,8 @@ export const EnvironmentInternalErrorReason = Schema.Literals([
   "orchestration_thread_snapshot_failed",
   "orchestration_thread_bounded_snapshot_failed",
   "orchestration_thread_history_failed",
+  /** Tailscale on the environment is busy or not running; trying again shortly can succeed. */
+  "tailnet_trust_unavailable",
   "internal_error",
 ]);
 export type EnvironmentInternalErrorReason = typeof EnvironmentInternalErrorReason.Type;
@@ -339,6 +345,10 @@ const EnvironmentSessionCreationErrors = [
 const EnvironmentTokenExchangeErrors = [
   EnvironmentRequestInvalidError,
   EnvironmentAuthInvalidError,
+  EnvironmentInternalError,
+] as const;
+const EnvironmentTailnetSessionErrors = [
+  EnvironmentOperationForbiddenError,
   EnvironmentInternalError,
 ] as const;
 const EnvironmentScopedOperationErrors = [
@@ -557,6 +567,13 @@ class EnvironmentAuthHttpApi extends HttpApiGroup.make("auth")
     }),
   )
   .add(
+    HttpApiEndpoint.post("tailnetSession", "/api/auth/tailnet-session", {
+      payload: AuthTailnetSessionRequest,
+      success: AuthAccessTokenResult,
+      error: EnvironmentTailnetSessionErrors,
+    }),
+  )
+  .add(
     HttpApiEndpoint.post("webSocketTicket", "/api/auth/websocket-ticket", {
       headers: OptionalBearerHeaders,
       success: AuthWebSocketTicketResult,
@@ -580,24 +597,10 @@ class EnvironmentAuthHttpApi extends HttpApiGroup.make("auth")
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
-    HttpApiEndpoint.get("pairingLinks", "/api/auth/pairing-links", {
-      headers: OptionalBearerHeaders,
-      success: Schema.Array(AuthPairingLink),
-      error: EnvironmentScopedOperationErrors,
-    }).middleware(EnvironmentAuthenticatedAuth),
-  )
-  .add(
     HttpApiEndpoint.post("revokePairingLink", "/api/auth/pairing-links/revoke", {
       headers: OptionalBearerHeaders,
       payload: AuthRevokePairingLinkInput,
       success: AuthPairingLinkRevokeResult,
-      error: EnvironmentScopedOperationErrors,
-    }).middleware(EnvironmentAuthenticatedAuth),
-  )
-  .add(
-    HttpApiEndpoint.get("clients", "/api/auth/clients", {
-      headers: OptionalBearerHeaders,
-      success: Schema.Array(AuthClientSession),
       error: EnvironmentScopedOperationErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   )
@@ -616,6 +619,14 @@ class EnvironmentAuthHttpApi extends HttpApiGroup.make("auth")
       error: EnvironmentScopedOperationErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
+
+class EnvironmentTailnetHttpApi extends HttpApiGroup.make("tailnet").add(
+  HttpApiEndpoint.get("peers", "/api/tailnet/peers", {
+    headers: OptionalBearerHeaders,
+    success: TailnetPeersResult,
+    error: EnvironmentScopedOperationErrors,
+  }).middleware(EnvironmentAuthenticatedAuth),
+) {}
 
 class EnvironmentMcpOAuthHttpApi extends HttpApiGroup.make("mcpOAuth")
   .add(
@@ -673,6 +684,7 @@ const EnvironmentOrchestrationShellSnapshotQuery = Schema.Struct({
 });
 
 const EnvironmentOrchestrationThreadBoundedSnapshotQuery = Schema.Struct({
+  deferWork: Schema.optionalKey(Schema.String),
   compactTurnItems: Schema.optionalKey(Schema.String),
   dedupeBodies: Schema.optionalKey(Schema.String),
   compactIds: Schema.optionalKey(Schema.String),
@@ -681,7 +693,8 @@ const EnvironmentOrchestrationThreadBoundedSnapshotQuery = Schema.Struct({
 const EnvironmentOrchestrationThreadHistoryQuery = Schema.Struct({
   cursor: TrimmedNonEmptyString,
   throughEntryId: Schema.optional(TrimmedNonEmptyString),
-  view: Schema.optional(Schema.Literals(["conversation", "activity"])),
+  view: Schema.optional(Schema.Literals(["conversation", "activity", "work"])),
+  deferWork: Schema.optionalKey(Schema.String),
   compactIds: Schema.optionalKey(Schema.String),
 });
 
@@ -822,13 +835,6 @@ class EnvironmentConnectHttpApi extends HttpApiGroup.make("connect")
     }),
   )
   .add(
-    HttpApiEndpoint.post("mintCredential", "/api/connect/mint-credential", {
-      payload: RelayCloudMintCredentialRequest,
-      success: RelayEnvironmentMintResponse,
-      error: EnvironmentHttpCloudErrors,
-    }),
-  )
-  .add(
     HttpApiEndpoint.post("t3MintCredential", "/api/t3-connect/mint-credential", {
       payload: RelayCloudMintCredentialRequest,
       success: RelayEnvironmentMintResponse,
@@ -859,6 +865,7 @@ class EnvironmentWebhooksHttpApi extends HttpApiGroup.make("webhooks")
 export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
+  .add(EnvironmentTailnetHttpApi)
   .add(EnvironmentMcpOAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
   .add(EnvironmentPullRequestsHttpApi)

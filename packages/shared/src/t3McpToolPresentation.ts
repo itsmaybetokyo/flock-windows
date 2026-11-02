@@ -51,7 +51,11 @@ export type T3McpToolSummaryAction =
   | "project-delete"
   | "project-clone"
   | "environment-read"
+  | "environment-links"
+  | "environment-link"
+  | "environment-unlink"
   | "environment-update"
+  | "memory"
   | "attachment-prepare"
   | "attachment-discard"
   | "attachment-send"
@@ -321,10 +325,23 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     ["Read", "Reading", "Read", "environment preferences"],
     "environment-read",
   ),
+  t3_environment_links: tool(
+    ["List", "Listing", "Listed", "linked environments"],
+    "environment-links",
+  ),
+  t3_environment_link: tool(
+    ["Ask to link", "Asking to link", "Asked to link", "an environment"],
+    "environment-link",
+  ),
+  t3_environment_unlink: tool(
+    ["Forget", "Forgetting", "Forgot", "a linked environment"],
+    "environment-unlink",
+  ),
   t3_environment_preferences_update: tool(
     ["Update", "Updating", "Updated", "environment preferences"],
     "environment-update",
   ),
+  memory: tool(["Use", "Using", "Used", "memory"], "memory"),
   t3_thread_launch: tool(["Launch", "Launching", "Launched", "a project thread"], "thread-create"),
   t3_project_list: tool(["List", "Listing", "Listed", "projects"], "project-list"),
   t3_project_read: tool(["Read", "Reading", "Read", "a project"], "project-read"),

@@ -31,6 +31,7 @@ import {
   resolveSshCommand,
   resolveSshTarget,
   runSshCommand,
+  sshTargetLogFields,
   targetConnectionKey,
 } from "./command.ts";
 import {
@@ -100,15 +101,6 @@ type SshEnvironmentEffectError =
   | SshReadinessError
   | SshPasswordPromptError
   | NetService.NetError;
-
-function sshTargetLogFields(target: DesktopSshEnvironmentTarget) {
-  return {
-    alias: target.alias,
-    hostname: target.hostname,
-    username: target.username,
-    port: target.port,
-  };
-}
 
 function isNodeScriptRunner(runner: RemoteT3RunnerOptions | undefined): boolean {
   return Boolean(runner?.nodeScriptPath?.trim());
@@ -1028,16 +1020,18 @@ const readRemoteServerLogTail = Effect.fn("ssh/tunnel.readRemoteServerLogTail")(
   return result.stdout.trim();
 });
 
+// The descriptor fits one round trip; the web app at "/" takes several over a high-latency tunnel.
+const TUNNEL_READINESS_PATH = "/.well-known/t3/environment";
+
 const waitForHttpReady = (input: {
   readonly baseUrl: string;
   readonly timeoutMs?: number;
   readonly intervalMs?: number;
   readonly probeTimeoutMs?: number;
-  readonly path?: string;
 }): Effect.Effect<void, SshReadinessError, HttpClient.HttpClient> =>
   waitForHttpReadyShared({
     baseUrl: input.baseUrl,
-    ...(input.path === undefined ? {} : { path: input.path }),
+    path: TUNNEL_READINESS_PATH,
     ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
     ...(input.intervalMs === undefined ? {} : { intervalMs: input.intervalMs }),
     probeTimeoutMs: input.probeTimeoutMs ?? SSH_READY_PROBE_TIMEOUT_MS,

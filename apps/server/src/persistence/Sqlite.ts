@@ -5,6 +5,7 @@ import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
+import { runForkMigrations } from "./ForkMigrations.ts";
 import { runMigrations } from "./Migrations.ts";
 import { initializeV2Database } from "./initializeV2Database.ts";
 import * as ServerConfig from "../config.ts";
@@ -28,9 +29,13 @@ const layerSetup = Layer.effectDiscard(
     yield* sql`PRAGMA synchronous = NORMAL;`;
     // macOS fsync misses drive caches; F_FULLFSYNC flushes them at checkpoints and is ignored elsewhere.
     yield* sql`PRAGMA checkpoint_fullfsync = ON;`;
+    // Keep statement journals and sort spills off the main thread's disk path.
+    // Large statements and open savepoints can increase peak memory use.
+    yield* sql`PRAGMA temp_store = MEMORY;`;
     // PASSIVE checkpoints retain peak WAL size until the last connection closes.
     yield* sql.unsafe(`PRAGMA journal_size_limit = ${WAL_SIZE_LIMIT_BYTES};`);
     yield* runMigrations();
+    yield* runForkMigrations();
     // Collecting stats scans every page, and stale small-table stats cause scans after growth; use indexes by default.
     // Connections cache stats; reload after deleting them.
     const statTables = yield* sql`SELECT 1 FROM sqlite_schema WHERE name = 'sqlite_stat1'`;

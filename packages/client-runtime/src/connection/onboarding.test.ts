@@ -6,6 +6,7 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
@@ -34,9 +35,12 @@ import {
   prepareBearerConnectionUpdate,
   preparePairingRegistration,
   prepareSshRegistration,
+  prepareTailnetRegistration,
+  tailnetCandidateBaseUrls,
 } from "./onboarding.ts";
 import * as EnvironmentRegistry from "./registry.ts";
 import * as ConnectionProfileStore from "./profileStore.ts";
+import { connectionRoutes, routeHttpBaseUrl } from "./routes.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
 
 const layerClientPresentation = Layer.succeed(
@@ -58,6 +62,14 @@ function layerPairingHttp(
     readonly protocolVersion?: number;
     readonly selfUpdate?: boolean;
     readonly grantScopes?: ReadonlyArray<AuthEnvironmentScope>;
+    readonly exchangeGate?: { readonly reached: () => void; readonly release: Promise<void> };
+    readonly unreachableOrigins?: ReadonlyArray<string>;
+    readonly tailnetSession?:
+      | "granted"
+      | "tailnet_trust_disabled"
+      | "tailnet_device_not_trusted"
+      | "tailnet_trust_unavailable"
+      | 404;
   },
 ) {
   const grantScopes = options?.grantScopes ?? AuthStandardClientScopes;
@@ -65,6 +77,51 @@ function layerPairingHttp(
   const fetchFn = ((input, init = {}) => {
     const url = String(input);
     calls.push({ url, init });
+    if (options?.unreachableOrigins?.includes(new URL(url).origin) === true) {
+      return Promise.reject(new TypeError("Network request failed"));
+    }
+
+    if (url.endsWith("/api/auth/tailnet-session")) {
+      const outcome = options?.tailnetSession ?? "granted";
+      if (outcome === 404) {
+        return Promise.resolve(new Response(null, { status: 404 }));
+      }
+      if (outcome === "tailnet_trust_unavailable") {
+        return Promise.resolve(
+          Response.json(
+            {
+              _tag: "EnvironmentInternalError",
+              code: "internal_error",
+              reason: outcome,
+              traceId: "trace-tailnet-test",
+            },
+            { status: 500 },
+          ),
+        );
+      }
+      if (outcome !== "granted") {
+        return Promise.resolve(
+          Response.json(
+            {
+              _tag: "EnvironmentOperationForbiddenError",
+              code: "operation_forbidden",
+              reason: outcome,
+              traceId: "trace-tailnet-test",
+            },
+            { status: 403 },
+          ),
+        );
+      }
+      return Promise.resolve(
+        Response.json({
+          access_token: "tailnet-bearer-token",
+          issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
+          token_type: "Bearer",
+          expires_in: 3600,
+          scope: grantScopes.join(" "),
+        }),
+      );
+    }
 
     if (url.endsWith("/.well-known/t3/environment")) {
       if (options?.failDescriptor === true) {
@@ -121,15 +178,17 @@ function layerPairingHttp(
           ),
         );
       }
-      return Promise.resolve(
-        Response.json({
-          access_token: "bearer-token",
-          issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
-          token_type: "Bearer",
-          expires_in: 3600,
-          scope: sessionScopes.join(" "),
-        }),
-      );
+      const granted = Response.json({
+        access_token: "bearer-token",
+        issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
+        token_type: "Bearer",
+        expires_in: 3600,
+        scope: sessionScopes.join(" "),
+      });
+      const gate = options?.exchangeGate;
+      if (gate === undefined) return Promise.resolve(granted);
+      gate.reached();
+      return gate.release.then(() => granted);
     }
 
     if (url.endsWith("/api/auth/session")) {
@@ -154,10 +213,13 @@ function layerPairingHttp(
   return RpcHttp.layerRemoteHttpClient(fetchFn);
 }
 
-function layerPairingOnboarding(options?: Parameters<typeof layerPairingHttp>[1]) {
+function layerPairingOnboarding(
+  options?: Parameters<typeof layerPairingHttp>[1],
+  calls: Array<{ readonly url: string; readonly init: RequestInit }> = [],
+) {
   const dependencies = Layer.mergeAll(
     layerClientPresentation,
-    layerPairingHttp([], options),
+    layerPairingHttp(calls, options),
     Layer.mock(Persistence.ConnectionTargetStore)({
       list: Effect.succeed([]),
       listDisabled: Effect.succeed([]),
@@ -168,7 +230,10 @@ function layerPairingOnboarding(options?: Parameters<typeof layerPairingHttp>[1]
     }),
     Layer.mock(Persistence.EnvironmentCacheStore)({}),
     Layer.mock(ConnectionProfileStore.ConnectionProfileStore)({}),
-    Layer.mock(ConnectionCredentialStore.ConnectionCredentialStore)({}),
+    Layer.mock(ConnectionCredentialStore.ConnectionCredentialStore)({
+      get: () => Effect.succeedNone,
+      put: () => Effect.void,
+    }),
     Layer.mock(ClientCapabilities.SshEnvironmentGateway)({}),
     Layer.succeed(
       Connectivity.Connectivity,
@@ -230,7 +295,7 @@ describe("connection onboarding", () => {
       const registration = yield* preparePairingRegistration({
         host: "remote.example.test",
         pairingCode: "pairing-token",
-      }).pipe(Effect.provide(Layer.mergeAll(layerClientPresentation, layerPairingHttp(calls))));
+      }).pipe(Effect.provide(layerPairingOnboarding(undefined, calls)));
 
       expect(registration).toMatchObject({
         _tag: "BearerConnectionRegistration",
@@ -294,6 +359,72 @@ describe("connection onboarding", () => {
     }).pipe(Effect.provide(layerPairingOnboarding())),
   );
 
+  it.effect("refuses a pairing link that claims a saved environment from a new address", () => {
+    const calls: Array<{ readonly url: string; readonly init: RequestInit }> = [];
+    return Effect.gen(function* () {
+      const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+      const onboarding = yield* Onboarding.ConnectionOnboarding;
+      const before = yield* registerSwitchedOffEnvironment;
+
+      const error = yield* onboarding
+        .registerPairing({ host: "attacker.example.test", pairingCode: "pairing-token" })
+        .pipe(Effect.flip);
+
+      expect(error).toMatchObject({ _tag: "ConnectionBlockedError", reason: "configuration" });
+      expect(yield* SubscriptionRef.get(registry.entries)).toEqual(before);
+      expect(calls.map((call) => call.url)).toEqual([
+        "https://attacker.example.test/.well-known/t3/environment",
+      ]);
+    }).pipe(Effect.provide(layerPairingOnboarding(undefined, calls)));
+  });
+
+  it.effect("refuses a new address when the environment is saved during the exchange", () => {
+    let reached!: () => void;
+    let release!: () => void;
+    const exchangeReached = new Promise<void>((resolve) => (reached = resolve));
+    const exchangeGate = {
+      reached: () => reached(),
+      release: new Promise<void>((resolve) => (release = resolve)),
+    };
+    return Effect.gen(function* () {
+      const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+      const onboarding = yield* Onboarding.ConnectionOnboarding;
+      const pairing = yield* onboarding
+        .registerPairing({ host: "attacker.example.test", pairingCode: "pairing-token" })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Effect.promise(() => exchangeReached);
+      const before = yield* registerSwitchedOffEnvironment;
+      release();
+
+      const outcome = yield* Fiber.join(pairing);
+
+      expect(outcome).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "ConnectionBlockedError", reason: "configuration" },
+      });
+      expect(yield* SubscriptionRef.get(registry.entries)).toEqual(before);
+    }).pipe(Effect.provide(layerPairingOnboarding({ exchangeGate })));
+  });
+
+  it.effect("adds a new address as a route when pairing targets that environment", () =>
+    Effect.gen(function* () {
+      const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+      const onboarding = yield* Onboarding.ConnectionOnboarding;
+      yield* registerSwitchedOffEnvironment;
+
+      yield* onboarding.registerPairing({
+        host: "lan.example.test",
+        pairingCode: "pairing-token",
+        expectedEnvironmentId: PAIRED_ENVIRONMENT_ID,
+      });
+
+      const entry = (yield* SubscriptionRef.get(registry.entries)).get(PAIRED_ENVIRONMENT_ID);
+      expect(entry === undefined ? [] : connectionRoutes(entry).map(routeHttpBaseUrl)).toEqual(
+        expect.arrayContaining(["https://remote.example.test/", "https://lan.example.test/"]),
+      );
+    }).pipe(Effect.provide(layerPairingOnboarding())),
+  );
+
   it.effect(
     "re-pairs an outdated self-updatable environment so its connection can be rechecked",
     () =>
@@ -334,34 +465,55 @@ describe("connection onboarding", () => {
       ),
   );
 
-  it.effect("leaves a platform-managed environment untouched when its id is paired", () =>
-    Effect.gen(function* () {
-      const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
-      const onboarding = yield* Onboarding.ConnectionOnboarding;
-      yield* registry.registerPlatform(
-        new PrimaryConnectionRegistration({
-          target: new PrimaryConnectionTarget({
-            environmentId: PAIRED_ENVIRONMENT_ID,
-            label: "Host environment",
-            httpBaseUrl: "http://127.0.0.1:3773",
-            wsBaseUrl: "ws://127.0.0.1:3773",
-          }),
+  it.effect.each([
+    {
+      kind: "primary",
+      registration: new PrimaryConnectionRegistration({
+        target: new PrimaryConnectionTarget({
+          environmentId: PAIRED_ENVIRONMENT_ID,
+          label: "Host environment",
+          httpBaseUrl: "http://127.0.0.1:3773",
+          wsBaseUrl: "ws://127.0.0.1:3773",
         }),
-      );
-      yield* registry.setCompatibility(PAIRED_ENVIRONMENT_ID, UNSUPPORTED_ERROR);
-      const before = yield* SubscriptionRef.get(registry.entries);
-      expect(before.get(PAIRED_ENVIRONMENT_ID)).toMatchObject({
-        enabled: true,
-        unsupportedReason: UNSUPPORTED_ERROR.message,
-      });
+      }),
+    },
+    {
+      kind: "bearer",
+      registration: new BearerConnectionRegistration({
+        target: new BearerConnectionTarget({
+          environmentId: PAIRED_ENVIRONMENT_ID,
+          connectionId: "platform:wsl",
+          label: "WSL",
+        }),
+        profile: new BearerConnectionProfile({
+          ...PAIRED_PROFILE,
+          connectionId: "platform:wsl",
+          label: "WSL",
+          httpBaseUrl: "http://127.0.0.1:4000",
+          wsBaseUrl: "ws://127.0.0.1:4000",
+        }),
+        credential: new BearerConnectionCredential({ token: "platform-token" }),
+      }),
+    },
+  ] as const)(
+    "leaves a platform-managed $kind environment untouched when its id is paired",
+    ({ registration }) =>
+      Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        const onboarding = yield* Onboarding.ConnectionOnboarding;
+        yield* registry.reconcilePlatform([registration]);
+        yield* registry.setCompatibility(PAIRED_ENVIRONMENT_ID, UNSUPPORTED_ERROR);
+        const before = yield* SubscriptionRef.get(registry.entries);
+        expect(before.get(PAIRED_ENVIRONMENT_ID)).toMatchObject({
+          enabled: true,
+          unsupportedReason: UNSUPPORTED_ERROR.message,
+        });
 
-      const environmentId = yield* onboarding.registerPairing(PAIRING_INPUT);
+        const environmentId = yield* onboarding.registerPairing(PAIRING_INPUT);
 
-      expect(environmentId).toBe(PAIRED_ENVIRONMENT_ID);
-      const after = yield* SubscriptionRef.get(registry.entries);
-      expect(after).toEqual(before);
-      expect(after.get(PAIRED_ENVIRONMENT_ID)?.unsupportedReason).toBe(UNSUPPORTED_ERROR.message);
-    }).pipe(Effect.provide(layerPairingOnboarding())),
+        expect(environmentId).toBe(PAIRED_ENVIRONMENT_ID);
+        expect(yield* SubscriptionRef.get(registry.entries)).toEqual(before);
+      }).pipe(Effect.provide(layerPairingOnboarding())),
   );
 
   it.effect("leaves a switched-off environment unchanged when the pairing exchange fails", () =>
@@ -392,10 +544,7 @@ describe("connection onboarding", () => {
         pairingCode: "pairing-token",
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(
-            layerClientPresentation,
-            layerPairingHttp(calls, { protocolVersion: ORCHESTRATION_PROTOCOL_VERSION + 1 }),
-          ),
+          layerPairingOnboarding({ protocolVersion: ORCHESTRATION_PROTOCOL_VERSION + 1 }, calls),
         ),
         Effect.flip,
       );
@@ -410,40 +559,54 @@ describe("connection onboarding", () => {
     { label: "default", scopes: AuthStandardClientScopes },
   ] as const)("preserves the $label grant when pairing a remote environment", ({ scopes }) =>
     Effect.gen(function* () {
-      const calls: Array<{ readonly url: string; readonly init: RequestInit }> = [];
-      const httpLayer = layerPairingHttp(calls, { grantScopes: scopes });
       const registration = yield* preparePairingRegistration({
         host: "remote.example.test",
         pairingCode: "pairing-token",
-      }).pipe(Effect.provide(Layer.mergeAll(layerClientPresentation, httpLayer)));
+      });
 
       const session = yield* fetchRemoteSessionState({
         httpBaseUrl: registration.profile.httpBaseUrl,
         bearerToken: registration.credential.token,
-      }).pipe(Effect.provide(httpLayer));
+      });
 
       expect(session.authenticated).toBe(true);
       expect(session.scopes).toEqual(scopes);
-    }),
+    }).pipe(Effect.provide(layerPairingOnboarding({ grantScopes: scopes }))),
   );
 
-  it.effect("refuses to add a route that reaches a different machine, keeping the code", () =>
-    Effect.gen(function* () {
-      const calls: Array<{ readonly url: string; readonly init: RequestInit }> = [];
-      const error = yield* preparePairingRegistration({
-        host: "remote.example.test",
-        pairingCode: "pairing-token",
-        expectedEnvironmentId: EnvironmentId.make("some-other-machine"),
-      }).pipe(
-        Effect.provide(Layer.mergeAll(layerClientPresentation, layerPairingHttp(calls))),
-        Effect.flip,
-      );
-      expect(error).toMatchObject({ reason: "configuration" });
-      expect(error.message).toContain("different machine");
-      expect(calls.map((call) => call.url)).toEqual([
-        "https://remote.example.test/.well-known/t3/environment",
-      ]);
-    }),
+  it.effect.each([
+    {
+      method: "a pairing code",
+      prepare: (expectedEnvironmentId: EnvironmentId) =>
+        preparePairingRegistration({
+          host: "remote.example.test",
+          pairingCode: "pairing-token",
+          expectedEnvironmentId,
+        }),
+    },
+    {
+      method: "tailnet trust",
+      prepare: (expectedEnvironmentId: EnvironmentId) =>
+        prepareTailnetRegistration({
+          address: "https://remote.example.test",
+          expectedEnvironmentId,
+        }),
+    },
+  ])(
+    "refuses to add a route that reaches a different machine before using $method",
+    ({ prepare }) =>
+      Effect.gen(function* () {
+        const calls: Array<{ readonly url: string; readonly init: RequestInit }> = [];
+        const error = yield* prepare(EnvironmentId.make("some-other-machine")).pipe(
+          Effect.provide(layerPairingOnboarding(undefined, calls)),
+          Effect.flip,
+        );
+        expect(error).toMatchObject({ reason: "configuration" });
+        expect(error.message).toContain("different machine");
+        expect(calls.map((call) => call.url)).toEqual([
+          "https://remote.example.test/.well-known/t3/environment",
+        ]);
+      }),
   );
 
   it.effect("refuses an outdated server that cannot update itself", () =>
@@ -454,10 +617,7 @@ describe("connection onboarding", () => {
         pairingCode: "pairing-token",
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(
-            layerClientPresentation,
-            layerPairingHttp(calls, { protocolVersion: ORCHESTRATION_PROTOCOL_VERSION - 1 }),
-          ),
+          layerPairingOnboarding({ protocolVersion: ORCHESTRATION_PROTOCOL_VERSION - 1 }, calls),
         ),
         Effect.flip,
       );
@@ -476,19 +636,105 @@ describe("connection onboarding", () => {
       yield* preparePairingRegistration({
         host: "remote.example.test",
         pairingCode: "pairing-token",
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            layerClientPresentation,
-            layerPairingHttp(calls, { failDescriptor: true }),
-          ),
-        ),
-        Effect.flip,
-      );
+      }).pipe(Effect.provide(layerPairingOnboarding({ failDescriptor: true }, calls)), Effect.flip);
 
       expect(calls.map((call) => call.url)).toEqual([
         "https://remote.example.test/.well-known/t3/environment",
       ]);
+    }),
+  );
+
+  it.each([
+    ["macbook", ["http://macbook:3773/", "https://macbook/"]],
+    ["100.101.102.103", ["http://100.101.102.103:3773/", "https://100.101.102.103/"]],
+    [
+      "macbook.tail1234.ts.net",
+      ["http://macbook.tail1234.ts.net:3773/", "https://macbook.tail1234.ts.net/"],
+    ],
+    ["macbook.tail1234.ts.net:443", ["https://macbook.tail1234.ts.net/"]],
+    ["macbook.tail1234.ts.net:3773", ["http://macbook.tail1234.ts.net:3773/"]],
+    ["macbook:80", ["http://macbook:80/"]],
+    ["[fd7a:115c:a1e0::1]:3773", ["http://[fd7a:115c:a1e0::1]:3773/"]],
+    ["https://macbook.tail1234.ts.net/some/path", ["https://macbook.tail1234.ts.net/"]],
+    [" macbook/ ", ["http://macbook:3773/", "https://macbook/"]],
+    ["", []],
+  ] as const)("tries %j at %j", (address, expected) => {
+    expect(tailnetCandidateBaseUrls(address)).toEqual(expected);
+  });
+
+  it.effect("connects through tailnet trust at the first address that answers", () =>
+    Effect.gen(function* () {
+      const calls: Array<{ readonly url: string; readonly init: RequestInit }> = [];
+      const registration = yield* prepareTailnetRegistration({ address: "remote" }).pipe(
+        Effect.provide(
+          layerPairingOnboarding({ unreachableOrigins: ["http://remote:3773"] }, calls),
+        ),
+      );
+
+      expect(registration).toMatchObject({
+        target: { environmentId: "environment-paired", label: "Paired environment" },
+        profile: {
+          httpBaseUrl: "https://remote/",
+          wsBaseUrl: "wss://remote/",
+          admission: "tailnet-trust",
+        },
+        credential: { token: "tailnet-bearer-token" },
+      });
+      expect(calls.map((call) => call.url)).toEqual([
+        "http://remote:3773/.well-known/t3/environment",
+        "https://remote/.well-known/t3/environment",
+        "https://remote/api/auth/tailnet-session",
+      ]);
+      const body = calls.at(-1)?.init.body;
+      expect(
+        JSON.parse(body instanceof Uint8Array ? new TextDecoder().decode(body) : String(body)),
+      ).toEqual({
+        client_label: "T3 Code Test",
+        client_device_type: "desktop",
+        client_os: "Test OS",
+      });
+    }),
+  );
+
+  it.effect.each([
+    {
+      options: { tailnetSession: "tailnet_trust_disabled" },
+      detail:
+        'Turn on "Trust my Tailscale devices" on Paired environment, or enter a pairing code.',
+      tag: "ConnectionBlockedError",
+    },
+    {
+      options: { tailnetSession: "tailnet_device_not_trusted" },
+      detail:
+        "Paired environment doesn't recognize this device as yours on Tailscale. Enter a pairing code.",
+      tag: "ConnectionBlockedError",
+    },
+    {
+      options: { tailnetSession: 404 },
+      detail: "Paired environment needs an update to connect without a code. Enter a pairing code.",
+      tag: "ConnectionBlockedError",
+    },
+    {
+      options: { tailnetSession: "tailnet_trust_unavailable" },
+      detail: "Tailscale on Paired environment couldn't answer just now. Try again in a moment.",
+      // A busy Tailscale is worth retrying, unlike a refusal.
+      tag: "ConnectionTransientError",
+    },
+    {
+      options: { failDescriptor: true },
+      detail: "Couldn't reach remote. Check that Tailscale is on and T3 Code is running there.",
+      tag: "ConnectionTransientError",
+    },
+  ] as const)("explains a refused tailnet connection: $detail", (row) =>
+    Effect.gen(function* () {
+      const error = yield* prepareTailnetRegistration({ address: "remote" }).pipe(
+        Effect.provide(layerPairingOnboarding(row.options)),
+        Effect.flip,
+      );
+      expect({ message: error.message, tag: error._tag }).toEqual({
+        message: row.detail,
+        tag: row.tag,
+      });
     }),
   );
 
@@ -514,6 +760,7 @@ describe("connection onboarding", () => {
               label: "Old label",
               httpBaseUrl: "http://old.example.test/",
               wsBaseUrl: "ws://old.example.test/",
+              admission: "tailnet-trust",
             }),
           ),
           enabled: true,
@@ -532,6 +779,7 @@ describe("connection onboarding", () => {
           label: "Renamed environment",
           httpBaseUrl: "http://100.65.180.100:3773/",
           wsBaseUrl: "ws://100.65.180.100:3773/",
+          admission: "tailnet-trust",
         },
         credential: { token: "bearer-token" },
       });

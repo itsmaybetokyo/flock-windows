@@ -1,6 +1,5 @@
 import {
   authScopeRequiredResponse,
-  AuthAccessReadScope,
   AuthAccessWriteScope,
   AuthStandardClientScopes,
   AuthGrantScope,
@@ -10,6 +9,7 @@ import {
   EnvironmentInternalError,
   type EnvironmentInternalErrorReason,
   EnvironmentOperationForbiddenError,
+  type EnvironmentOperationForbiddenReason,
   EnvironmentRequestInvalidError,
   type EnvironmentRequestInvalidReason,
   EnvironmentResourceNotFoundError,
@@ -33,6 +33,7 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import * as SessionStore from "./SessionStore.ts";
+import * as TailnetTrust from "../tailnet/TailnetTrust.ts";
 import { traceAuthenticatedRelayRequest, traceRelayRequest } from "../cloud/traceRelayRequest.ts";
 import { deriveAuthClientMetadata } from "./utils.ts";
 import { verifyRequestDpopProof } from "./dpop.ts";
@@ -44,6 +45,25 @@ const CREDENTIAL_RESPONSE_HEADERS = {
 
 const appendCredentialResponseHeaders = HttpEffect.appendPreResponseHandler((_request, response) =>
   Effect.succeed(HttpServerResponse.setHeaders(response, CREDENTIAL_RESPONSE_HEADERS)),
+);
+
+const CORS_RESPONSE_HEADERS = [
+  "access-control-allow-origin",
+  "access-control-allow-credentials",
+  "access-control-expose-headers",
+] as const;
+
+/**
+ * Decided by the route that matched, so no path spelling the router accepts (case, slashes)
+ * lets a web page read what tailnet trust hands out.
+ */
+const removeCorsHeaders = HttpEffect.appendPreResponseHandler((_request, response) =>
+  Effect.succeed(
+    CORS_RESPONSE_HEADERS.reduce(
+      (withoutCors, header) => HttpServerResponse.removeHeader(withoutCors, header),
+      response,
+    ),
+  ),
 );
 
 const appendDpopChallengeHeader = HttpEffect.appendPreResponseHandler((_request, response) =>
@@ -133,7 +153,7 @@ export function failEnvironmentScopeRequired(requiredScope: AuthEnvironmentScope
   );
 }
 
-function failEnvironmentOperationForbidden(reason: "current_session_revoke_not_allowed") {
+function failEnvironmentOperationForbidden(reason: EnvironmentOperationForbiddenReason) {
   return currentEnvironmentTraceId.pipe(
     Effect.flatMap((traceId) =>
       Effect.fail(
@@ -183,6 +203,24 @@ export const authenticateMediaRequest =
     }
     return session;
   });
+
+/**
+ * A media socket authenticates once at the upgrade; this ends it when that session stops being
+ * valid, as the RPC socket does, so a revoked or no longer trusted session loses its streams too.
+ */
+export const untilSessionEnds =
+  (session: Pick<EnvironmentAuth.AuthenticatedSession, "sessionId" | "subject">) =>
+  <A, E, R>(socket: Effect.Effect<A, E, R>) =>
+    EnvironmentAuth.EnvironmentAuth.pipe(
+      Effect.flatMap((serverAuth) =>
+        Effect.raceFirst(
+          socket,
+          serverAuth
+            .awaitSessionEnd(session)
+            .pipe(Effect.ignore, Effect.as(HttpServerResponse.empty())),
+        ),
+      ),
+    );
 
 export const failEnvironmentInternal =
   /* Request instrumentation already owns the span; keep this helper in that context. */
@@ -264,6 +302,7 @@ export const layer = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
     const sessions = yield* SessionStore.SessionStore;
+    const tailnetTrust = yield* TailnetTrust.TailnetTrust;
 
     return handlers
       .handle(
@@ -412,6 +451,32 @@ export const layer = HttpApiBuilder.group(
         ),
       )
       .handle(
+        "tailnetSession",
+        Effect.fn("environment.auth.tailnetSession")(
+          function* (args) {
+            yield* removeCorsHeaders;
+            yield* annotateEnvironmentRequest(args.endpoint.name);
+            const request = yield* HttpServerRequest.HttpServerRequest;
+            yield* appendCredentialResponseHeaders;
+            return yield* tailnetTrust.issueSession(request, {
+              ...(args.payload.client_label ? { label: args.payload.client_label } : {}),
+              ...(args.payload.client_device_type
+                ? { deviceType: args.payload.client_device_type }
+                : {}),
+              ...(args.payload.client_os ? { os: args.payload.client_os } : {}),
+            });
+          },
+          Effect.catchTags({
+            TailnetTrustRefusedError: (error) =>
+              error.reason === "tailnet_trust_unavailable"
+                ? failEnvironmentInternal("tailnet_trust_unavailable")
+                : failEnvironmentOperationForbidden(error.reason),
+            ServerAuthAuthenticatedAccessTokenIssueError: (error) =>
+              failEnvironmentInternal("access_token_issuance_failed", error),
+          }),
+        ),
+      )
+      .handle(
         "webSocketTicket",
         Effect.fn("environment.auth.webSocketTicket")(
           function* (args) {
@@ -465,19 +530,6 @@ export const layer = HttpApiBuilder.group(
         ),
       )
       .handle(
-        "pairingLinks",
-        Effect.fn("environment.auth.pairingLinks")(
-          function* (args) {
-            yield* annotateEnvironmentRequest(args.endpoint.name);
-            yield* requireEnvironmentScope(AuthAccessReadScope);
-            return yield* serverAuth.listPairingLinks();
-          },
-          Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
-            failEnvironmentInternal("pairing_links_load_failed", error),
-          ),
-        ),
-      )
-      .handle(
         "revokePairingLink",
         Effect.fn("environment.auth.revokePairingLink")(
           function* (args) {
@@ -488,19 +540,6 @@ export const layer = HttpApiBuilder.group(
           },
           Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
             failEnvironmentInternal("pairing_link_revoke_failed", error),
-          ),
-        ),
-      )
-      .handle(
-        "clients",
-        Effect.fn("environment.auth.clients")(
-          function* (args) {
-            yield* annotateEnvironmentRequest(args.endpoint.name);
-            const session = yield* requireEnvironmentScope(AuthAccessReadScope);
-            return yield* serverAuth.listClientSessions(session.sessionId);
-          },
-          Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>
-            failEnvironmentInternal("client_sessions_load_failed", error),
           ),
         ),
       )

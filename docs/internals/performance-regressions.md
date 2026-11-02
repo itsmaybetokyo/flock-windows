@@ -15,7 +15,9 @@ The v2 checks pin these invariants:
 - Cold opens and history pages stop at about 1 MiB of encoded rows. A window that holds a user
   turn also stops at 10 user turns (20 on older pages) or 500 rows, so ordinary turns stay whole.
   Any other window, including the inside of one turn longer than 500 rows, stops at 75 rows. The
-  snapshot query applies the same rule before it decodes payloads. Required control records and
+  snapshot query applies the same rule before it decodes payloads. Clients can opt into deferring
+  large work groups until expansion. Messages and items outside those groups remain in normal
+  history paging. Required control records and
   the at-least-one-row rule can exceed the byte target; it is not a hard cap.
 - The bounded snapshot does not retain the full duplicate conversation-message table.
 - Older activity is fetched in bounded HTTP pages and merged without disturbing the live scroll
@@ -32,8 +34,9 @@ The v2 checks pin these invariants:
   projects small can increase server allocations on repeated large tool updates.
 - Raw command output, dynamic-tool result bodies, and inline file-change bodies are omitted at
   the wire boundary, including small outputs. Explicit failure flags and bounded result IDs
-  preserve status and grouped action counts without shipping those bodies. Subagent prompts and
-  results, reasoning text, command lines, search results, and checkpoint file lists still ship.
+  preserve status and grouped action counts without shipping those bodies. Reasoning text,
+  command lines, and search results ship when their work group loads. Subagent prompts and results
+  and checkpoint control records still accompany the initial window.
   Persisted events remain complete; the existing diff endpoints still provide file content when
   requested.
   Explicit cross-environment transcript exports preserve full tool bodies so the destination
@@ -50,6 +53,11 @@ The v2 checks pin these invariants:
   query, and transcript message bodies stay in thread detail regardless of message size.
 - Shell resume sends deltas plus compact repository-enrichment metadata, not another full project
   and thread snapshot.
+- React Native's iOS socket negotiates no permessage-deflate. Clients ask for
+  `frameCompression=deflate`, and for an upgrade without a permessage-deflate offer the server
+  deflates every RPC frame through one per-socket stream
+  ([rpcFrameCompression](../../packages/shared/src/rpcFrameCompression.ts)). A streamed turn that
+  costs such a client 319 KB raw costs 20 KB this way. Payloads sent around the RPC serializer miss it.
 - Auto, steer, and restart sends resolve delivery from authoritative state inside the
   server's per-thread dispatch lock. Model selection and identified-checkpoint rollback also
   dispatch without first fetching a full thread projection when the server advertises support.

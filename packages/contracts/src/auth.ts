@@ -228,6 +228,17 @@ export const AuthTokenExchangeRequest = Schema.Struct({
 }).pipe(HttpApiSchema.asFormUrlEncoded());
 export type AuthTokenExchangeRequest = typeof AuthTokenExchangeRequest.Type;
 
+/**
+ * Asks for a session without a pairing code. The environment decides from the Tailscale
+ * identity of the connection, never from these fields, which only label the session.
+ */
+export const AuthTailnetSessionRequest = Schema.Struct({
+  client_label: Schema.optionalKey(TrimmedNonEmptyString),
+  client_device_type: Schema.optionalKey(AuthClientMetadataDeviceType),
+  client_os: Schema.optionalKey(TrimmedNonEmptyString),
+});
+export type AuthTailnetSessionRequest = typeof AuthTailnetSessionRequest.Type;
+
 export const AuthAccessTokenResult = Schema.Struct({
   access_token: TrimmedNonEmptyString,
   issued_token_type: Schema.Literal(AuthAccessTokenType),
@@ -408,6 +419,19 @@ export const AuthMcpClientAccess = Schema.Literals([
 ]);
 export type AuthMcpClientAccess = typeof AuthMcpClientAccess.Type;
 
+/** The scopes an agent session gets for an access level, and a pairing code must carry. */
+export const mcpClientScopes = (access: AuthMcpClientAccess): ReadonlyArray<AuthGrantScope> =>
+  access === "read-only"
+    ? [AuthOrchestrationReadScope]
+    : access === "full-access"
+      ? [
+          AuthOrchestrationReadScope,
+          AuthOrchestrationOperateScope,
+          AuthSettingsWriteScope,
+          AuthSourceControlWriteScope,
+        ]
+      : [AuthOrchestrationReadScope, AuthOrchestrationOperateScope];
+
 export const AuthMcpProtectedResourceMetadata = Schema.Struct({
   resource: Schema.String,
   authorization_servers: Schema.Array(Schema.String),
@@ -431,8 +455,16 @@ export const AuthMcpAuthorizationServerMetadata = Schema.Struct({
 });
 export type AuthMcpAuthorizationServerMetadata = typeof AuthMcpAuthorizationServerMetadata.Type;
 
+/**
+ * The `software_id` another T3 Code environment registers with when it links
+ * to this one. Its session is then a peer link: the work it starts here stays
+ * within that link. Claiming it only ever adds limits.
+ */
+export const MCP_PEER_LINK_SOFTWARE_ID = "t3code-peer-link";
+
 export const AuthMcpClientRegistration = Schema.Struct({
   client_name: Schema.optionalKey(Schema.String),
+  software_id: Schema.optionalKey(Schema.String),
   redirect_uris: Schema.optionalKey(Schema.Array(Schema.String)),
   token_endpoint_auth_method: Schema.optionalKey(Schema.String),
 });

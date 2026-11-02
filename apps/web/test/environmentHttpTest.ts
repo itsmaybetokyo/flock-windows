@@ -100,6 +100,7 @@ export async function installEnvironmentHttpTest(scenario: EnvironmentHttpTestSc
               }),
             )
             .handle("token", () => unexpectedEndpoint("auth.token"))
+            .handle("tailnetSession", () => unexpectedEndpoint("auth.tailnetSession"))
             .handle("webSocketTicket", () => unexpectedEndpoint("auth.webSocketTicket"))
             .handle("webSocketTicketFor", () => unexpectedEndpoint("auth.webSocketTicketFor"))
             .handle(
@@ -112,9 +113,7 @@ export async function installEnvironmentHttpTest(scenario: EnvironmentHttpTestSc
                 );
               }),
             )
-            .handle("pairingLinks", () => unexpectedEndpoint("auth.pairingLinks"))
             .handle("revokePairingLink", () => unexpectedEndpoint("auth.revokePairingLink"))
-            .handle("clients", () => unexpectedEndpoint("auth.clients"))
             .handle("revokeClient", () => unexpectedEndpoint("auth.revokeClient"))
             .handle("revokeOtherClients", () => unexpectedEndpoint("auth.revokeOtherClients")),
         ),

@@ -1,9 +1,7 @@
 import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 
-import { canMaintainEnvironment, findEnvironmentUpdate } from "./environment-maintenance";
-
-afterEach(() => vi.unstubAllGlobals());
+import { canMaintainEnvironment } from "./environment-maintenance";
 
 describe("environment maintenance access", () => {
   it("requires a connected authenticated session with operate permission", () => {

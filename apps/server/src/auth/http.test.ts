@@ -24,6 +24,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as AuthHttp from "./http.ts";
+import * as TailnetTrust from "../tailnet/TailnetTrust.ts";
 
 const DEV_TOKEN = "reusable-dev-auth-token-that-is-long-enough";
 class AuthTestApi extends HttpApi.make("environment").add(EnvironmentHttpApi.groups.auth) {}
@@ -49,6 +50,8 @@ const layerEnvironmentAuth = EnvironmentAuth.layer.pipe(
 );
 const layerRoutes = HttpApiBuilder.layer(AuthTestApi).pipe(
   Layer.provide(AuthHttp.layer),
+  // Unused by these routes; tailnet/http.test.ts runs the real tailnet-session path.
+  Layer.provide(Layer.mock(TailnetTrust.TailnetTrust)({})),
   Layer.provide(AuthHttp.layerAuthenticatedAuth),
   Layer.provideMerge(layerEnvironmentAuth),
   Layer.provide(layerConfig),

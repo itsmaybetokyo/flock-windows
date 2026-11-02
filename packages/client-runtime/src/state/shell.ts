@@ -10,6 +10,7 @@ import {
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -17,10 +18,11 @@ import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import * as SynchronizedRef from "effect/SynchronizedRef";
 import { AsyncResult, Atom } from "effect/reactivity";
 
 import * as EnvironmentRegistry from "../connection/registry.ts";
-import { connectionProjectionPhase } from "../connection/model.ts";
+import { connectionProjectionPhase, type PreparedConnection } from "../connection/model.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as ConnectionWakeups from "../connection/wakeups.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
@@ -29,6 +31,7 @@ import { runCachePersistence } from "./cachePersistence.ts";
 import { subscribeDynamic } from "../rpc/client.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import * as ShellSnapshotLoader from "./shellSnapshotHttp.ts";
+import * as ConnectionTimings from "../connection/timings.ts"; // temp: connection timings
 import type { DeferredShellSnapshot } from "./shellPullRequests.ts";
 import {
   applyShellStreamEvent,
@@ -80,6 +83,29 @@ function withoutDeferredPullRequests(value: DeferredShellSnapshot): Orchestratio
 }
 
 const SHELL_SYNCHRONIZATION_ERROR_MESSAGE = "Could not synchronize environment data.";
+
+interface ShellSnapshotLoadOptions {
+  readonly omitIdleSubagents: boolean;
+  readonly omitOlderSettled: boolean;
+}
+
+// HTTP and the socket must agree, or omitted children would return through the socket.
+function shellSnapshotLoadOptions(config: Option.Option<ServerConfig>): ShellSnapshotLoadOptions {
+  const families = Option.exists(config, (value) => value.shellThreadFamilies === true);
+  return {
+    omitIdleSubagents: families,
+    omitOlderSettled:
+      families && Option.exists(config, (value) => value.shellOlderSettled === true),
+  };
+}
+
+interface ShellSnapshotLoad {
+  readonly prepared: PreparedConnection;
+  readonly options: ShellSnapshotLoadOptions;
+  readonly fiber: Fiber.Fiber<Option.Option<DeferredShellSnapshot>>;
+  // A load is used by at most one session; later sessions load again.
+  readonly claimed: boolean;
+}
 
 export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")(function* () {
   const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
@@ -274,6 +300,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     }
     yield* SubscriptionRef.set(state, next);
     if (receivedSnapshot) {
+      ConnectionTimings.markShellSnapshotApplied(environmentId); // temp: connection timings
       const session = yield* Ref.get(activeSubscriptionSession);
       if (session !== null) {
         yield* Ref.set(lastAuthoritativeSession, session);
@@ -357,27 +384,63 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
       service.changes.pipe(Stream.filter(ConnectionWakeups.shouldResubscribeAfterWakeup)),
   });
 
+  // Starts the HTTP snapshot load once a connection is prepared, overlapping the socket handshake;
+  // a superseded connection interrupts it. The live server config arrives over the socket, so the
+  // early load uses the cached config, and the subscription reloads if the live one differs.
+  const scope = yield* Effect.scope;
+  const snapshotLoad = yield* SynchronizedRef.make<ShellSnapshotLoad | null>(null);
+  const cachedLoadOptions = cache.loadServerConfig(environmentId).pipe(
+    Effect.orElseSucceed(() => Option.none<ServerConfig>()),
+    Effect.map(shellSnapshotLoadOptions),
+  );
+  const interruptSnapshotLoad = (current: ShellSnapshotLoad | null) =>
+    current === null ? Effect.void : Fiber.interrupt(current.fiber);
+  const startSnapshotLoad = (
+    current: ShellSnapshotLoad | null,
+    prepared: PreparedConnection,
+    options: ShellSnapshotLoadOptions,
+    claimed: boolean,
+  ) =>
+    interruptSnapshotLoad(current).pipe(
+      Effect.andThen(Effect.forkIn(snapshotLoader.load(prepared, options), scope)),
+      Effect.map((fiber): ShellSnapshotLoad => ({ prepared, options, fiber, claimed })),
+      Effect.uninterruptible,
+    );
+  yield* SubscriptionRef.changes(supervisor.prepared).pipe(
+    Stream.map(Option.getOrNull),
+    Stream.runForEach((prepared) =>
+      SynchronizedRef.updateEffect(snapshotLoad, (current) => {
+        if ((current?.prepared ?? null) === prepared) return Effect.succeed(current);
+        if (prepared === null) return interruptSnapshotLoad(current).pipe(Effect.as(null));
+        return cachedLoadOptions.pipe(
+          Effect.flatMap((options) => startSnapshotLoad(current, prepared, options, false)),
+        );
+      }),
+    ),
+    Effect.forkScoped,
+  );
+  const claimSnapshotLoad = (prepared: PreparedConnection, options: ShellSnapshotLoadOptions) =>
+    SynchronizedRef.modifyEffect(snapshotLoad, (current) =>
+      current?.prepared === prepared &&
+      !current.claimed &&
+      current.options.omitIdleSubagents === options.omitIdleSubagents &&
+      current.options.omitOlderSettled === options.omitOlderSettled
+        ? Effect.succeed([current.fiber, { ...current, claimed: true }] as const)
+        : startSnapshotLoad(current, prepared, options, true).pipe(
+            Effect.map((next) => [next.fiber, next] as const),
+          ),
+    );
+
   yield* setSynchronizing;
   yield* Effect.forkScoped(
     subscribeDynamic(
       ORCHESTRATION_V2_WS_METHODS.subscribeShell,
       Effect.fn("EnvironmentShellState.makeSubscribeInput")(function* (session) {
         yield* Ref.set(activeSubscriptionSession, session);
-        const { supportsCompletionMarker, omitIdleSubagents, omitOlderSettled } =
-          yield* session.initialConfig.pipe(
-            Effect.map((config) => ({
-              supportsCompletionMarker: config.shellResumeCompletionMarker === true,
-              omitIdleSubagents: config.shellThreadFamilies === true,
-              omitOlderSettled:
-                config.shellOlderSettled === true && config.shellThreadFamilies === true,
-            })),
-            Effect.orElseSucceed(() => ({
-              supportsCompletionMarker: false,
-              omitIdleSubagents: false,
-              omitOlderSettled: false,
-            })),
-          );
-        yield* Ref.set(awaitingCompletion, supportsCompletionMarker);
+        const config = yield* session.initialConfig.pipe(Effect.option);
+        const loadOptions = shellSnapshotLoadOptions(config);
+        const { omitIdleSubagents, omitOlderSettled } = loadOptions;
+        yield* Ref.set(awaitingCompletion, true);
         yield* setSynchronizing;
 
         // Foreground resubscriptions on the same live session can resume from
@@ -401,11 +464,10 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
               }),
             ),
           );
-          // HTTP and the socket must agree, or omitted children would return through the socket.
-          const httpSnapshot = yield* snapshotLoader.load(prepared, {
-            omitIdleSubagents,
-            omitOlderSettled,
-          });
+          // An interrupted load belongs to a superseded connection; fall back to the socket snapshot.
+          const httpSnapshot = Option.flatten(
+            Exit.getSuccess(yield* Fiber.await(yield* claimSnapshotLoad(prepared, loadOptions))),
+          );
           if (Option.isSome(httpSnapshot)) {
             yield* cancelActiveFill;
             const previous = yield* SubscriptionRef.get(state);
@@ -432,22 +494,12 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
           ...(omitOlderSettled ? { omitOlderSettled: true as const } : {}),
         };
         if (!canResume || Option.isNone(current.snapshot)) {
-          return {
-            ...omission,
-            ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
-          };
-        }
-        if (!supportsCompletionMarker) {
-          yield* SubscriptionRef.update(state, (value) => ({
-            ...value,
-            status: "live" as const,
-            error: Option.none(),
-          }));
+          return { ...omission, requestCompletionMarker: true as const };
         }
         return {
           afterSequence: current.snapshot.value.snapshotSequence,
           ...omission,
-          ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
+          requestCompletionMarker: true as const,
         };
       }),
       {
@@ -484,16 +536,12 @@ function shellStateChanges(environmentId: EnvironmentId) {
 export interface EnvironmentShellSummary {
   readonly hasSnapshot: boolean;
   readonly hasSynchronizingShell: boolean;
-  readonly hasCachedShell: boolean;
-  readonly hasLiveShell: boolean;
   readonly firstError: string | null;
 }
 
 const EMPTY_ENVIRONMENT_SHELL_SUMMARY: EnvironmentShellSummary = Object.freeze({
   hasSnapshot: false,
   hasSynchronizingShell: false,
-  hasCachedShell: false,
-  hasLiveShell: false,
   firstError: null,
 });
 
@@ -506,8 +554,6 @@ function shellSummariesEqual(
   return (
     left.hasSnapshot === right.hasSnapshot &&
     left.hasSynchronizingShell === right.hasSynchronizingShell &&
-    left.hasCachedShell === right.hasCachedShell &&
-    left.hasLiveShell === right.hasLiveShell &&
     left.firstError === right.firstError
   );
 }
@@ -532,15 +578,11 @@ export function createEnvironmentShellSummaryAtom(input: {
   return Atom.make((get) => {
     let hasSnapshot = false;
     let hasSynchronizingShell = false;
-    let hasCachedShell = false;
-    let hasLiveShell = false;
     let firstError: string | null = null;
 
     for (const environmentId of enabledEnvironmentIds(get(input.catalogValueAtom))) {
       const state = get(input.shellStateValueAtom(environmentId));
       hasSynchronizingShell ||= state.status === "synchronizing";
-      hasCachedShell ||= state.status === "cached";
-      hasLiveShell ||= state.status === "live";
       if (firstError === null) {
         firstError = Option.getOrNull(state.error);
       }
@@ -553,8 +595,6 @@ export function createEnvironmentShellSummaryAtom(input: {
     const next: EnvironmentShellSummary = {
       hasSnapshot,
       hasSynchronizingShell,
-      hasCachedShell,
-      hasLiveShell,
       firstError,
     };
     if (shellSummariesEqual(previousSummary, next)) {
@@ -624,7 +664,7 @@ export function createEnvironmentShellAtoms<R, E>(
 
   const stateValueAtom = Atom.family((environmentId: EnvironmentId) =>
     Atom.make((get) =>
-      Option.getOrElse(AsyncResult.value(get(stateAtom(environmentId))), () => EMPTY_SHELL_STATE),
+      AsyncResult.getOrElse(get(stateAtom(environmentId)), () => EMPTY_SHELL_STATE),
     ).pipe(Atom.withLabel(`environment-shell-state-value:${environmentId}`)),
   );
 

@@ -2,12 +2,14 @@ import { tokenizeCliArgs } from "@t3tools/shared/cliArgs";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 
+import { hasT3Memory } from "@t3tools/provider-core/server/orchestrationInstructions";
 import type { McpProviderSessionConfig } from "@t3tools/provider-core/server/mcpSession";
 import {
   PI_T3_MCP_EXTENSION_FILENAME,
   PI_T3_MCP_EXTENSION_SOURCE,
   T3_MCP_BEARER_ENV,
   T3_MCP_URL_ENV,
+  T3_PI_MEMORY_ENV,
   T3_PI_RUNTIME_MODE_ENV,
   T3_PI_MCP_EXTENSION_PATH_ENV,
 } from "./mcpExtensionSource.ts";
@@ -250,7 +252,6 @@ export function buildPiRpcLaunch(input: {
 }): {
   readonly args: ReadonlyArray<string>;
   readonly env: NodeJS.ProcessEnv;
-  readonly hasT3Mcp: boolean;
 } {
   const hasT3Extension = input.disableExtensions !== true && input.extensionPath !== undefined;
   const hasT3Mcp = hasT3Extension && input.mcpSession !== undefined;
@@ -305,9 +306,9 @@ export function buildPiRpcLaunch(input: {
             [T3_MCP_BEARER_ENV]: bearerTokenFromAuthorizationHeader(
               input.mcpSession.authorizationHeader,
             ),
+            ...(hasT3Memory(input.mcpSession) ? { [T3_PI_MEMORY_ENV]: "1" } : {}),
           }
         : {}),
     },
-    hasT3Mcp,
   };
 }

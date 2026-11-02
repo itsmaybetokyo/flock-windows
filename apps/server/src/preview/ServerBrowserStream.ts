@@ -20,13 +20,12 @@ import {
 } from "effect/http";
 import * as Socket from "effect/socket/Socket";
 
-import { authenticateMediaRequest } from "../auth/http.ts";
+import { authenticateMediaRequest, untilSessionEnds } from "../auth/http.ts";
 import { assetResponseHeaders } from "../http.ts";
 import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 
 const PREVIEW_STREAM_ROUTE_PREFIX = "/api/preview-stream";
-/** Matches `PREVIEW_STREAM_TAB_GONE_CODE` in the client. */
 const TAB_GONE_CODE = 4404;
 
 const DEFAULT_QUALITY = 70;
@@ -201,6 +200,7 @@ const makeHandler = Effect.fnUntraced(function* (browser: ServerBrowser.ServerBr
       return yield* Effect.raceFirst(Effect.forever(sendOutput), Effect.forever(receiveInput));
     }),
   ).pipe(
+    untilSessionEnds(session),
     Effect.catchTags({
       ServerBrowserLaunchError: (error) =>
         Effect.logWarning("server preview browser failed to start", { cause: error.cause }).pipe(

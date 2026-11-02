@@ -69,6 +69,32 @@ export function cliReleaseChannelOf(version: string): CliReleaseChannel {
   return channel === "nightly" || channel === "preview" ? channel : "stable";
 }
 
+/** Whether updating between these versions crosses Stable and Nightly. Preview builds cross nothing.
+ * Hosts refuse a crossing outside a track switch, which checks the database first. */
+export function crossesReleaseTrack(fromVersion: string, toVersion: string): boolean {
+  const from = cliReleaseChannelOf(fromVersion);
+  const to = cliReleaseChannelOf(toVersion);
+  return from !== to && from !== "preview" && to !== "preview";
+}
+
+/** The desktop update track a build belongs to. Preview builds have no feed and read as Stable. */
+export function desktopUpdateChannelOf(version: string): "latest" | "nightly" {
+  return cliReleaseChannelOf(version) === "nightly" ? "nightly" : "latest";
+}
+
+/** Whether a track switch may install `found` after its database check cleared `checked`: any build
+ * on the switch's track at least as new, since later releases only add migrations. */
+export function acceptsTrackSwitchRelease(
+  found: string,
+  channel: "latest" | "nightly",
+  checked: string,
+): boolean {
+  return (
+    cliReleaseChannelOf(found) === (channel === "nightly" ? "nightly" : "stable") &&
+    compareSemverVersions(found, checked) >= 0
+  );
+}
+
 /** Page until the channel matches; nightlies can push preview/stable releases past the first page. */
 export function cliReleaseIndexPageUrl(page: number): string {
   return `https://api.github.com/repos/${CLI_RELEASE_REPOSITORY}/releases?per_page=100&page=${page}`;
@@ -93,4 +119,77 @@ export function newestCliReleaseVersion(
     if (cliReleaseChannelOf(version) === channel) return version;
   }
   return undefined;
+}
+
+const Release = Schema.Struct({
+  tag_name: Schema.String,
+  draft: Schema.optionalKey(Schema.Boolean),
+});
+const decodeLatestRelease = Schema.decodeUnknownOption(Schema.fromJsonString(Release));
+const decodeReleases = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Array(Release)));
+const FEED_TAG = /<id>tag:github\.com,2008:Repository\/\d+\/([^<]+)<\/id>/g;
+
+export type FetchReleaseText = (
+  url: string,
+  init: { readonly signal: AbortSignal; readonly headers: Record<string, string> },
+) => Promise<Pick<Response, "ok" | "status" | "text">>;
+
+async function getText(
+  fetchText: FetchReleaseText,
+  url: string,
+  accept: string,
+  signal: AbortSignal,
+) {
+  const response = await fetchText(url, { signal, headers: { Accept: accept } });
+  if (!response.ok) throw new Error(`Could not check releases (${response.status}). Try again.`);
+  return response.text();
+}
+
+/** Newest release on a channel, or null when the channel has none. Public release pages come
+ * first because devices on one network share the API's anonymous quota. */
+export async function findLatestCliRelease(
+  channel: CliReleaseChannel,
+  signal: AbortSignal,
+  fetchText: FetchReleaseText,
+): Promise<string | null> {
+  const first =
+    channel === "stable"
+      ? // A repository without a stable release redirects /latest to its HTML release list.
+        Option.toArray(
+          decodeLatestRelease(
+            await getText(fetchText, `${CLI_RELEASES_PAGE_URL}/latest`, "application/json", signal),
+          ),
+        )
+      : Array.from(
+          (
+            await getText(
+              fetchText,
+              `${CLI_RELEASES_PAGE_URL}.atom`,
+              "application/atom+xml",
+              signal,
+            )
+          ).matchAll(FEED_TAG),
+          ([, tag_name = ""]) => ({ tag_name }),
+        );
+  let version = newestCliReleaseVersion(first, channel);
+  // The feed holds only the newest ten releases, which nightlies can fill.
+  for (let page = 1; version === undefined; page++) {
+    const releases = decodeReleases(
+      await getText(fetchText, cliReleaseIndexPageUrl(page), "application/vnd.github+json", signal),
+    );
+    version = newestCliReleaseVersion(releases, channel);
+    if (releases.length < 100) break;
+  }
+  return version ?? null;
+}
+
+const NpmReleaseMigrationManifest = Schema.Struct({
+  t3code: Schema.Struct({ databaseMigration: Schema.Int }),
+});
+const decodeNpmReleaseMigrationManifest = Schema.decodeUnknownOption(NpmReleaseMigrationManifest);
+
+/** Highest database migration a release's server knows, from its npm `t3` manifest. */
+export function npmReleaseDatabaseMigration(manifest: unknown): number | undefined {
+  return Option.getOrUndefined(decodeNpmReleaseMigrationManifest(manifest))?.t3code
+    .databaseMigration;
 }

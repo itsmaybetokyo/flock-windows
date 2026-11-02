@@ -2,9 +2,6 @@ import {
   AuthAccessTokenType,
   AuthAccessWriteScope,
   AuthOrchestrationOperateScope,
-  AuthOrchestrationReadScope,
-  AuthSettingsWriteScope,
-  AuthSourceControlWriteScope,
   AuthStandardClientScopes,
   type AuthAccessTokenResult,
   type AuthBrowserSessionResult,
@@ -24,6 +21,7 @@ import {
   type AuthWebSocketTicketUse,
   DpopFailureReason,
   type DpopFailureReason as DpopFailureReasonType,
+  mcpClientScopes,
 } from "@t3tools/contracts";
 import { encodeOAuthScope } from "@t3tools/shared/oauthScope";
 import * as Context from "effect/Context";
@@ -42,6 +40,7 @@ import * as EnvironmentAuthPolicy from "./EnvironmentAuthPolicy.ts";
 import * as PairingGrantStore from "./PairingGrantStore.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as SessionStore from "./SessionStore.ts";
+import { isTailnetDeviceSubject, TailnetSessionGate } from "./TailnetSessionGate.ts";
 import { REUSABLE_DEV_SESSION_EXPIRES_AT, resolveReusableDevAuth } from "./ReusableDevAuth.ts";
 import { verifyRequestDpopProof } from "./dpop.ts";
 import { DESKTOP_RENDERER_ORIGINS } from "../httpCors.ts";
@@ -74,24 +73,12 @@ export interface IssuedBearerSession {
 const MCP_CLIENT_SUBJECT = "mcp-client";
 const MCP_CLIENT_SESSION_TTL = Duration.days(30);
 
-export const mcpClientScopes = (
-  access: AuthMcpClientAccess,
-): ReadonlyArray<AuthEnvironmentScope> =>
-  access === "read-only"
-    ? [AuthOrchestrationReadScope]
-    : access === "full-access"
-      ? [
-          AuthOrchestrationReadScope,
-          AuthOrchestrationOperateScope,
-          AuthSettingsWriteScope,
-          AuthSourceControlWriteScope,
-        ]
-      : [AuthOrchestrationReadScope, AuthOrchestrationOperateScope];
-
 export interface McpClientSession {
   readonly sessionId: AuthSessionId;
   readonly label: string;
   readonly access: AuthMcpClientAccess;
+  /** Another T3 Code environment's link, whose work here stays within it. */
+  readonly peerLink: boolean;
 }
 
 export interface AuthenticatedSession {
@@ -343,6 +330,15 @@ export class ServerAuthCloudMintJwtSigningError extends Schema.TaggedError<Serve
   }
 }
 
+export class ServerAuthTailnetIdentityUnavailableError extends Schema.TaggedError<ServerAuthTailnetIdentityUnavailableError>()(
+  "ServerAuthTailnetIdentityUnavailableError",
+  {},
+) {
+  override get message(): string {
+    return "Tailscale has not confirmed whose devices this machine trusts yet.";
+  }
+}
+
 export const ServerAuthInternalError = Schema.Union([
   ServerAuthBootstrapCredentialValidationError,
   ServerAuthSessionCredentialValidationError,
@@ -366,6 +362,7 @@ export const ServerAuthInternalError = Schema.Union([
   ServerAuthCloudRelayIssuerMissingError,
   ServerAuthCloudHealthJwtSigningError,
   ServerAuthCloudMintJwtSigningError,
+  ServerAuthTailnetIdentityUnavailableError,
 ]);
 export type ServerAuthInternalError = typeof ServerAuthInternalError.Type;
 export const isServerAuthInternalError = Schema.is(ServerAuthInternalError);
@@ -443,7 +440,7 @@ export class ServerAuthMcpApprovalCodeError extends Schema.TaggedError<ServerAut
 ) {
   override get message(): string {
     return this.reason === "insufficient_scope"
-      ? "That pairing code cannot grant this access, and it is now used up. Create one with the standard scopes, or choose Read only with a new code."
+      ? "That pairing code cannot grant this access. It has not been used, so choose an access level it grants, or create a code with the standard scopes."
       : this.reason === "not_a_pairing_code"
         ? "That is not a one-time pairing code."
         : "That pairing code is unknown, expired, or already used.";
@@ -522,9 +519,6 @@ export class EnvironmentAuth extends Context.Service<
     readonly revokeSession: (
       sessionId: AuthSessionId,
     ) => Effect.Effect<boolean, ServerAuthInternalError>;
-    readonly revokeOtherSessionsExcept: (
-      sessionId: AuthSessionId,
-    ) => Effect.Effect<number, ServerAuthInternalError>;
     readonly listClientSessions: (
       currentSessionId: AuthSessionId,
     ) => Effect.Effect<ReadonlyArray<AuthClientSession>, ServerAuthInternalError>;
@@ -555,6 +549,7 @@ export class EnvironmentAuth extends Context.Service<
     readonly issueMcpClientSession: (input: {
       readonly label: string;
       readonly access: AuthMcpClientAccess;
+      readonly peerLink: boolean;
       readonly client: AuthClientMetadata;
     }) => Effect.Effect<
       {
@@ -572,6 +567,10 @@ export class EnvironmentAuth extends Context.Service<
     readonly authenticateBrowserSession: (
       request: HttpServerRequest.HttpServerRequest,
     ) => Effect.Effect<AuthenticatedSession, ServerAuthCredentialError | ServerAuthInternalError>;
+    /** Completes when a connected session stops being valid: revoked, or no longer admitted by tailnet trust. */
+    readonly awaitSessionEnd: (
+      session: Pick<AuthenticatedSession, "sessionId" | "subject">,
+    ) => Effect.Effect<void, ServerAuthInternalError>;
   }
 >()("t3/auth/EnvironmentAuth") {}
 
@@ -720,6 +719,24 @@ export const make = Effect.gen(function* () {
   const descriptor = yield* policy.getDescriptor();
   const config = yield* ServerConfig.ServerConfig;
   const devAuth = resolveReusableDevAuth(config);
+  const tailnetGate = yield* TailnetSessionGate;
+
+  // A session trust admitted is good only while trust still covers the identity it was stamped
+  // with; one admitted under another login or Tailscale user is revoked on sight. Runs inside
+  // the request's span on every authentication, so it adds none of its own.
+  const rejectUnlessTailnetTrusted = Effect.fnUntraced(function* <
+    S extends { readonly subject: string; readonly sessionId: AuthSessionId },
+  >(session: S) {
+    if (!isTailnetDeviceSubject(session.subject)) return session;
+    const verdict = yield* tailnetGate.check(session.subject);
+    if (verdict === "admitted") return session;
+    // Not the client's fault and not for long: retryable, not a bad credential.
+    if (verdict === "unknown") return yield* new ServerAuthTailnetIdentityUnavailableError({});
+    if (verdict === "mismatch") yield* sessions.revoke(session.sessionId).pipe(Effect.ignore);
+    return yield* new ServerAuthInvalidCredentialError({
+      diagnostic: `Tailnet trust does not admit this session (${verdict}).`,
+    });
+  });
 
   const authenticateToken = (
     token: string,
@@ -739,6 +756,7 @@ export const make = Effect.gen(function* () {
       ),
       mapSessionVerificationErrors,
       Effect.flatMap(rejectMcpClientAudience),
+      Effect.flatMap(rejectUnlessTailnetTrusted),
       Effect.map((session) => ({
         sessionId: session.sessionId,
         subject: session.subject,
@@ -778,7 +796,14 @@ export const make = Effect.gen(function* () {
     const dpopToken = parseDpopToken(request);
     const credential = resolveRequestCredential(request);
     if (!credential?.token) {
-      return Effect.fail(new ServerAuthMissingCredentialError({}));
+      // An Authorization header this server cannot read is a bad credential, not none at all.
+      return Effect.fail(
+        request.headers.authorization === undefined
+          ? new ServerAuthMissingCredentialError({})
+          : new ServerAuthInvalidCredentialError({
+              diagnostic: "The Authorization header is not a Bearer or DPoP token.",
+            }),
+      );
     }
     if (
       isBrowserCookieCredential(credential.source) &&
@@ -918,6 +943,7 @@ export const make = Effect.gen(function* () {
     input?: {
       readonly proofKeyThumbprint?: string;
       readonly requestedScopes?: ReadonlyArray<AuthEnvironmentScope>;
+      readonly requiredScopes?: ReadonlyArray<AuthEnvironmentScope>;
     },
   ): Effect.Effect<
     ResolvedBootstrapGrant,
@@ -936,6 +962,12 @@ export const make = Effect.gen(function* () {
     }
     return sessions.verify(credential).pipe(
       mapSessionVerificationErrors,
+      Effect.filterOrFail(
+        (session) =>
+          input?.requiredScopes === undefined ||
+          input.requiredScopes.every((scope) => session.scopes.includes(scope)),
+        () => new ServerAuthScopeNotGrantedError({}),
+      ),
       Effect.map(
         (session) =>
           ({
@@ -1123,9 +1155,7 @@ export const make = Effect.gen(function* () {
       Effect.withSpan("EnvironmentAuth.revokeSession"),
     );
 
-  const revokeOtherSessionsExcept: EnvironmentAuth["Service"]["revokeOtherSessionsExcept"] = (
-    sessionId,
-  ) =>
+  const revokeOtherSessionsExcept = (sessionId: AuthSessionId) =>
     sessions.revokeAllExcept(sessionId).pipe(
       Effect.mapError((cause) => new ServerAuthOtherSessionsRevocationError({ cause })),
       Effect.withSpan("EnvironmentAuth.revokeOtherSessionsExcept"),
@@ -1246,7 +1276,11 @@ export const make = Effect.gen(function* () {
         if (websocketTicket && websocketTicket.trim().length > 0) {
           const session = yield* sessions
             .verifyWebSocketToken(websocketTicket)
-            .pipe(mapSessionVerificationErrors, Effect.flatMap(rejectMcpClientAudience));
+            .pipe(
+              mapSessionVerificationErrors,
+              Effect.flatMap(rejectMcpClientAudience),
+              Effect.flatMap(rejectUnlessTailnetTrusted),
+            );
           if (session.audience !== undefined && session.audience !== use) {
             return yield* new ServerAuthInvalidCredentialError({
               diagnostic: `WebSocket ticket was issued for the ${session.audience} route.`,
@@ -1305,6 +1339,7 @@ export const make = Effect.gen(function* () {
               access: session.scopes.includes(AuthOrchestrationOperateScope)
                 ? (session.runtimeModeCeiling ?? "approval-required")
                 : "read-only",
+              peerLink: session.peerLink === true,
             } satisfies McpClientSession)
           : Effect.fail(
               new ServerAuthInvalidCredentialError({
@@ -1324,6 +1359,7 @@ export const make = Effect.gen(function* () {
         scopes: mcpClientScopes(input.access),
         ttl: MCP_CLIENT_SESSION_TTL,
         ...(input.access === "read-only" ? {} : { runtimeModeCeiling: input.access }),
+        peerLink: input.peerLink,
         client: { ...input.client, label: input.label, deviceType: "bot" },
       })
       .pipe(
@@ -1356,7 +1392,7 @@ export const make = Effect.gen(function* () {
     code,
     access,
   ) =>
-    resolveBootstrapGrant(code.trim()).pipe(
+    resolveBootstrapGrant(code.trim(), { requiredScopes: mcpClientScopes(access) }).pipe(
       Effect.catchTags({
         ServerAuthInvalidCredentialError: () =>
           Effect.fail(new ServerAuthMcpApprovalCodeError({ reason: "unknown_or_used" })),
@@ -1366,12 +1402,23 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((grant) =>
         grant.method !== "one-time-token" && grant.method !== "reusable-dev-token"
           ? Effect.fail(new ServerAuthMcpApprovalCodeError({ reason: "not_a_pairing_code" }))
-          : mcpClientScopes(access).every((scope) => grant.scopes.includes(scope))
-            ? Effect.void
-            : Effect.fail(new ServerAuthMcpApprovalCodeError({ reason: "insufficient_scope" })),
+          : Effect.void,
       ),
       Effect.withSpan("EnvironmentAuth.consumeMcpApprovalCode"),
     );
+
+  const awaitSessionEnd: EnvironmentAuth["Service"]["awaitSessionEnd"] = (session) =>
+    Effect.raceFirst(
+      sessions
+        .awaitInvalidation(session.sessionId)
+        .pipe(
+          Effect.mapError((cause) => new ServerAuthSessionCredentialValidationError({ cause })),
+        ),
+      // Closes the connection even when trust-off revocation has not happened or failed.
+      isTailnetDeviceSubject(session.subject)
+        ? tailnetGate.whenRefused(session.subject)
+        : Effect.never,
+    ).pipe(Effect.withSpan("EnvironmentAuth.awaitSessionEnd"));
 
   return EnvironmentAuth.of({
     getDescriptor: Effect.fn("EnvironmentAuth.getDescriptor")(function () {
@@ -1388,7 +1435,6 @@ export const make = Effect.gen(function* () {
     issueSession,
     listSessions,
     revokeSession,
-    revokeOtherSessionsExcept,
     listClientSessions,
     revokeClientSession,
     revokeOtherClientSessions,
@@ -1400,6 +1446,7 @@ export const make = Effect.gen(function* () {
     issueMcpClientSession,
     consumeMcpApprovalCode,
     authenticateBrowserSession,
+    awaitSessionEnd,
   });
 });
 

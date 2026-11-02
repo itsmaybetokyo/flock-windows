@@ -22,6 +22,7 @@ import {
   ConnectionTransientError,
   type ConnectionAttemptError,
 } from "../connection/model.ts";
+import * as ConnectionTimings from "../connection/timings.ts"; // temp: connection timings
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
 import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import * as ClientCapabilities from "../platform/capabilities.ts";
@@ -33,7 +34,6 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
@@ -50,6 +50,7 @@ export interface AuthorizedRemoteEnvironment {
   readonly httpBaseUrl: string;
   readonly socketUrl: string;
   readonly httpAuthorization: PreparedHttpAuthorization;
+  readonly descriptor?: ExecutionEnvironmentDescriptor;
 }
 
 export interface AuthorizedRemoteHttpEnvironment {
@@ -68,6 +69,7 @@ export class RemoteEnvironmentAuthorization extends Context.Service<
       readonly wsBaseUrl: string;
       readonly bearerToken: string;
       readonly connectionMethod: ClientConnectionMethod;
+      readonly checkedDescriptor?: ExecutionEnvironmentDescriptor;
     }) => Effect.Effect<AuthorizedRemoteEnvironment, ConnectionAttemptError>;
     readonly authorizeDpop: (input: {
       readonly expectedEnvironmentId: EnvironmentId;
@@ -77,6 +79,7 @@ export class RemoteEnvironmentAuthorization extends Context.Service<
        * environment's LAN or tailnet address.
        */
       readonly directEndpoint?: { readonly httpBaseUrl: string; readonly wsBaseUrl: string };
+      readonly checkedDescriptor?: ExecutionEnvironmentDescriptor;
     }) => Effect.Effect<AuthorizedRemoteEnvironment, ConnectionAttemptError>;
     readonly authorizeDpopHttp: (input: {
       readonly expectedEnvironmentId: EnvironmentId;
@@ -86,7 +89,6 @@ export class RemoteEnvironmentAuthorization extends Context.Service<
 >()("@t3tools/client-runtime/authorization/service/RemoteEnvironmentAuthorization") {}
 
 const CACHED_ENDPOINT_SOCKET_TIMEOUT_MS = 3_000;
-const BEARER_DESCRIPTOR_CACHE_TTL_MS = 10_000;
 const DPOP_AUTHORIZATION_TIMEOUT_MS = 30_000;
 
 function mapDpopSocketError(error: RemoteEnvironmentAuthError | ConnectionAttemptError) {
@@ -127,55 +129,32 @@ export const make = Effect.gen(function* () {
       readonly token: Effect.Effect<TokenStore.RemoteDpopAccessToken, ConnectionAttemptError>;
     }
   >();
-  const bearerDescriptors = yield* Ref.make<
-    ReadonlyMap<
-      EnvironmentId,
-      {
-        readonly httpBaseUrl: string;
-        readonly descriptor: ExecutionEnvironmentDescriptor;
-        readonly validatedAtEpochMs: number;
-      }
-    >
-  >(new Map());
 
   /**
    * A saved LAN address can belong to another machine on a different network.
+   * `checkedDescriptor` is one this connect already fetched from the same address.
    */
   const verifyDirectEndpoint = Effect.fn("clientRuntime.connection.remote.verifyDirectEndpoint")(
     function* (input: {
       readonly expectedEnvironmentId: EnvironmentId;
       readonly httpBaseUrl: string;
       readonly connectionMethod: ClientConnectionMethod;
+      readonly checkedDescriptor?: ExecutionEnvironmentDescriptor;
     }) {
-      const now = yield* Clock.currentTimeMillis;
-      const cachedDescriptor = (yield* Ref.get(bearerDescriptors)).get(input.expectedEnvironmentId);
-      const canReuseDescriptor =
-        cachedDescriptor?.httpBaseUrl === input.httpBaseUrl &&
-        cachedDescriptor.validatedAtEpochMs + BEARER_DESCRIPTOR_CACHE_TTL_MS > now;
-      const descriptor = canReuseDescriptor
-        ? cachedDescriptor.descriptor
-        : yield* fetchDescriptor(input.httpBaseUrl, input.connectionMethod).pipe(
-            Effect.provideService(HttpClient.HttpClient, httpClient),
-          );
+      const descriptor =
+        input.checkedDescriptor ??
+        (yield* fetchDescriptor(input.httpBaseUrl, input.connectionMethod).pipe(
+          Effect.provideService(HttpClient.HttpClient, httpClient),
+        ));
       if (descriptor.environmentId !== input.expectedEnvironmentId) {
         return yield* environmentMismatchError({
           expected: input.expectedEnvironmentId,
           actual: descriptor.environmentId,
         });
       }
-      if (!canReuseDescriptor) {
-        yield* Ref.update(bearerDescriptors, (current) => {
-          const next = new Map(current);
-          next.set(input.expectedEnvironmentId, {
-            httpBaseUrl: input.httpBaseUrl,
-            descriptor,
-            validatedAtEpochMs: now,
-          });
-          return next;
-        });
-      }
       return descriptor;
     },
+    ConnectionTimings.step("descriptor"), // temp: connection timings
   );
 
   const authorizeBearer = Effect.fn("clientRuntime.connection.remote.authorizeBearer")(
@@ -187,6 +166,7 @@ export const make = Effect.gen(function* () {
       readonly wsBaseUrl: string;
       readonly bearerToken: string;
       readonly connectionMethod: ClientConnectionMethod;
+      readonly checkedDescriptor?: ExecutionEnvironmentDescriptor;
     }) {
       const descriptor = yield* verifyDirectEndpoint(input);
       const socketUrl = yield* resolveRemoteWebSocketConnectionUrl({
@@ -198,12 +178,14 @@ export const make = Effect.gen(function* () {
       }).pipe(
         Effect.mapError(mapRemoteEnvironmentError),
         Effect.provideService(HttpClient.HttpClient, httpClient),
+        ConnectionTimings.step("ticket"), // temp: connection timings
       );
       return {
         environmentId: descriptor.environmentId,
         label: descriptor.label,
         httpBaseUrl: input.httpBaseUrl,
         socketUrl,
+        descriptor,
         httpAuthorization: {
           _tag: "Bearer" as const,
           token: input.bearerToken,
@@ -238,6 +220,7 @@ export const make = Effect.gen(function* () {
       });
     },
     Effect.provideService(HttpClient.HttpClient, httpClient),
+    ConnectionTimings.step("ticket"), // temp: connection timings
   );
 
   const sessionChanged = () =>
@@ -472,7 +455,7 @@ export const make = Effect.gen(function* () {
     const token = yield* selected.token;
     yield* assertSession(identity);
     return { token, fromCache: selected.fromCache, identity };
-  });
+  }, ConnectionTimings.step("token")); // temp: connection timings
 
   const httpAuthorization = (
     token: TokenStore.RemoteDpopAccessToken,
@@ -492,16 +475,21 @@ export const make = Effect.gen(function* () {
     input: Parameters<RemoteEnvironmentAuthorization["Service"]["authorizeDpop"]>[0],
   ) {
     const endpoint = input.directEndpoint;
-    if (endpoint !== undefined) {
-      yield* verifyDirectEndpoint({
-        expectedEnvironmentId: input.expectedEnvironmentId,
-        httpBaseUrl: endpoint.httpBaseUrl,
-        connectionMethod: "direct",
-      });
-    }
+    const descriptor =
+      endpoint === undefined
+        ? undefined
+        : yield* verifyDirectEndpoint({
+            expectedEnvironmentId: input.expectedEnvironmentId,
+            httpBaseUrl: endpoint.httpBaseUrl,
+            connectionMethod: "direct",
+            ...(input.checkedDescriptor === undefined
+              ? {}
+              : { checkedDescriptor: input.checkedDescriptor }),
+          });
     const authorized = (token: TokenStore.RemoteDpopAccessToken, socketUrl: string) => ({
       ...httpAuthorization(token, endpoint?.httpBaseUrl),
       socketUrl,
+      ...(descriptor === undefined ? {} : { descriptor }),
     });
     let selected = yield* getDpopToken(input);
     if (selected.fromCache) {

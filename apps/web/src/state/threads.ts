@@ -11,12 +11,14 @@ import {
   createThreadEnvironmentAtoms,
   createThreadFamilyAtoms,
 } from "@t3tools/client-runtime/state/threads";
+import { createThreadCatchUpAtoms } from "@t3tools/client-runtime/state/thread-catch-up";
 import type { EnvironmentId, OrchestrationV2ThreadShell, ThreadId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { useEffect } from "react";
 
 import { environmentCatalog } from "../connection/catalog";
+import { getDocumentActivity, subscribeDocumentActivity } from "../lib/documentActivity";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentShell } from "./shell";
@@ -47,6 +49,7 @@ export function useThreadFamily(
   environmentId: EnvironmentId | null,
   rootThreadId: ThreadId | null,
 ): void {
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- mounts the subagent tree into the thread family registry while the caller shows it
   useEffect(() => {
     if (environmentId === null || rootThreadId === null) return;
     return threadFamilies.mount(appAtomRegistry, environmentId, rootThreadId);
@@ -66,10 +69,7 @@ export function useEnvironmentThread(
       ? environmentThreads.stateAtom(environmentId, threadId)
       : EMPTY_THREAD_STATE_ATOM,
   );
-  const state = Option.getOrElse(
-    AsyncResult.value(result),
-    () => EMPTY_ENVIRONMENT_THREAD_STATE,
-  ) as EnvironmentThreadState;
+  const state = AsyncResult.getOrElse(result, () => EMPTY_ENVIRONMENT_THREAD_STATE);
   return state;
 }
 
@@ -133,10 +133,26 @@ export function createRunningThreadKeepAliveAtom<E>(input: {
   }).pipe(Atom.withLabel("web-running-thread-keep-alive"));
 }
 
+const enabledEnvironmentIdsAtom = Atom.map(environmentCatalog.catalogValueAtom, (catalog) => [
+  ...enabledEnvironmentIds(catalog),
+]);
+
 export const runningThreadKeepAliveAtom = createRunningThreadKeepAliveAtom({
-  environmentIdsAtom: Atom.map(environmentCatalog.catalogValueAtom, (catalog) => [
-    ...enabledEnvironmentIds(catalog),
-  ]),
+  environmentIdsAtom: enabledEnvironmentIdsAtom,
   threadsAtom: environmentThreadShells.environmentThreadsAtom,
   stateAtom: environmentThreads.stateAtom,
+});
+
+const documentVisibleAtom = Atom.make((get) => {
+  get.addFinalizer(subscribeDocumentActivity(() => get.setSelf(getDocumentActivity().visible)));
+  return getDocumentActivity().visible;
+}).pipe(Atom.withLabel("web-document-visible"));
+
+/** Keeps saved copies of closed threads current while this window is visible. */
+export const threadCatchUp = createThreadCatchUpAtoms({
+  runtime: connectionAtomRuntime,
+  environmentIdsAtom: enabledEnvironmentIdsAtom,
+  shellStateAtom: environmentShell.stateValueAtom,
+  catchUp: environmentThreads.catchUp,
+  foregroundAtom: documentVisibleAtom,
 });
