@@ -237,6 +237,11 @@ minimumReleaseAgeExclude:
   - "@cursor/sdk-win32-x64@1.2.0"
   - "@cursor/sdk@1.2.0"
   - "@distilled.cloud/aws@1.0.0-rc.18"
+  - libdiffy-darwin-arm64@0.1.0
+  - libdiffy-darwin-x64@0.1.0
+  - libdiffy-linux-arm64-gnu@0.1.0
+  - libdiffy-linux-x64-gnu@0.1.0
+  - libdiffy@0.1.0
 
 overrides:
   # Pin every patched package, including transitive dependencies, so lockfile-free
