@@ -51,6 +51,8 @@ import {
   OrchestrationSearchThreadsError,
   OrchestrationV2SearchThreadError,
   OrchestrationGetTurnDiffError,
+  OrchestrationGetTurnSemanticDiffError,
+  OrchestrationExpandTurnDiffGapError,
   ORCHESTRATION_V2_WS_METHODS,
   ORCHESTRATION_PROTOCOL_QUERY_PARAM,
   CLIENT_CAPABILITIES_QUERY_PARAM,
@@ -1994,6 +1996,26 @@ export const layerWsRpc = (
               (cause) =>
                 new OrchestrationGetFullThreadDiffError({
                   message: "Failed to load full thread diff",
+                  cause,
+                }),
+            ),
+          ),
+        [ORCHESTRATION_V2_WS_METHODS.getTurnSemanticDiff]: (input) =>
+          checkpointDiffQuery.getTurnSemanticDiff(input).pipe(
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationGetTurnSemanticDiffError({
+                  message: "Failed to load turn diff",
+                  cause,
+                }),
+            ),
+          ),
+        [ORCHESTRATION_V2_WS_METHODS.expandTurnDiffGap]: (input) =>
+          checkpointDiffQuery.expandTurnDiffGap(input).pipe(
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationExpandTurnDiffGapError({
+                  message: "Failed to expand unchanged lines",
                   cause,
                 }),
             ),
