@@ -3118,6 +3118,7 @@ export const layerWsRpc = (
               ),
           ),
         [WS_METHODS.gitResolvePullRequest]: (input) => gitWorkflow.resolvePullRequest(input),
+        [WS_METHODS.gitPreviewChangeRequest]: (input) => gitWorkflow.previewChangeRequest(input),
         [WS_METHODS.gitPreparePullRequestThread]: (input) =>
           gitWorkflow
             .preparePullRequestThread(input)
