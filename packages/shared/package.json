@@ -39,6 +39,10 @@
       "types": "./src/themePreview.ts",
       "import": "./src/themePreview.ts"
     },
+    "./textDirection": {
+      "types": "./src/textDirection.ts",
+      "import": "./src/textDirection.ts"
+    },
     "./projectFavicon": {
       "types": "./src/projectFavicon.ts",
       "import": "./src/projectFavicon.ts"
@@ -339,6 +343,10 @@
       "types": "./src/AgentScope.ts",
       "import": "./src/AgentScope.ts"
     },
+    "./managedPolicyFile": {
+      "types": "./src/managedPolicyFile.ts",
+      "import": "./src/managedPolicyFile.ts"
+    },
     "./HostProcess": {
       "types": "./src/HostProcess.ts",
       "import": "./src/HostProcess.ts"
@@ -470,6 +478,10 @@
     "./markdownWindowsPaths": {
       "types": "./src/markdownWindowsPaths.ts",
       "import": "./src/markdownWindowsPaths.ts"
+    },
+    "./generatedImageMarkdown": {
+      "types": "./src/generatedImageMarkdown.ts",
+      "import": "./src/generatedImageMarkdown.ts"
     },
     "./markdownPipeline": {
       "types": "./src/markdownPipeline.ts",

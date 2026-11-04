@@ -23,6 +23,7 @@ import {
   sendsTokenInClear,
   usableRoutes,
 } from "./routes.ts";
+import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import * as RpcSession from "../rpc/session.ts";
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
 import * as ConnectionTimings from "./timings.ts"; // temp: connection timings
@@ -42,6 +43,8 @@ export interface EnvironmentConnectionLease {
 }
 
 export type RouteCheck = "answered" | "silent" | "unchecked";
+/** "unprepared" means the route answered its check but could not be prepared. */
+export type RoutePreflight = "ready" | "unprepared" | "silent" | "unchecked";
 
 const ROUTE_CHECK_TIMEOUT_MS = 2_500;
 // Preferred direct routes share one head start, so a relay or SSH connection
@@ -59,7 +62,7 @@ export class ConnectionDriver extends Context.Service<
     readonly preflight: (
       entry: ConnectionCatalogEntry,
       route: ConnectionRoute,
-    ) => Effect.Effect<boolean>;
+    ) => Effect.Effect<RoutePreflight>;
     /** Asks the host behind a live session to answer a fresh request on the session's own origin. */
     readonly checkHost: (prepared: PreparedConnection) => Effect.Effect<RouteCheck>;
   }
@@ -177,6 +180,7 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
 export const make = Effect.gen(function* () {
   const resolver = yield* ConnectionResolver.ConnectionResolver;
   const sessions = yield* RpcSession.RpcSessionFactory;
+  const remote = yield* RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization;
   const httpClient = yield* HttpClient.HttpClient;
 
   // The descriptor is public, so this sends no credential to whatever
@@ -258,13 +262,13 @@ export const make = Effect.gen(function* () {
       ? Effect.succeed("silent" as const)
       : checkRoute(entry, route)
     ).pipe(
-      Effect.flatMap((check) =>
-        check === "answered"
-          ? resolver.prepare(routeEntry(entry, route)).pipe(
-              Effect.as(true),
-              Effect.orElseSucceed(() => false),
-            )
-          : Effect.succeed(false),
+      Effect.filterOrElse(
+        (check): check is Exclude<RouteCheck, "answered"> => check !== "answered",
+        () =>
+          resolver.prepare(routeEntry(entry, route)).pipe(
+            Effect.as<RoutePreflight>("ready"),
+            Effect.orElseSucceed((): RoutePreflight => "unprepared"),
+          ),
       ),
       Effect.withSpan("ConnectionDriver.preflight"),
     );

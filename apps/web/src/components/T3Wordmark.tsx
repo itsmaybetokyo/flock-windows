@@ -1,7 +1,8 @@
-import type { SVGProps } from "react";
+import { useId, type SVGProps } from "react";
 
 // Fork: Flock's bird, drawn from the app icon, in place of upstream's T3 mark.
 export function T3Wordmark(props: SVGProps<SVGSVGElement>) {
+  const faceCutout = useId();
   return (
     <svg {...props} viewBox="-1 -0.33 2 0.92" xmlns="http://www.w3.org/2000/svg">
       <g transform="scale(1 1.35)" fill="currentColor">

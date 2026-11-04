@@ -17,6 +17,7 @@ import {
   type GitManagerServiceError,
   type GitPreparePullRequestThreadInput,
   type GitPreparePullRequestThreadResult,
+  type GitPreviewChangeRequestResult,
   type GitPullRequestRefInput,
   type VcsPullResult,
   type VcsRemoveWorktreeInput,
@@ -68,6 +69,9 @@ export class GitWorkflowService extends Context.Service<
     readonly resolvePullRequest: (
       input: GitPullRequestRefInput,
     ) => Effect.Effect<GitResolvePullRequestResult, GitManagerServiceError>;
+    readonly previewChangeRequest: (
+      input: VcsStatusInput,
+    ) => Effect.Effect<GitPreviewChangeRequestResult, GitManagerServiceError>;
     readonly preparePullRequestThread: (
       input: GitPreparePullRequestThreadInput,
     ) => Effect.Effect<GitPreparePullRequestThreadResult, GitManagerServiceError>;
@@ -105,6 +109,7 @@ export class GitWorkflowService extends Context.Service<
     readonly fetchWorktreeBaseCommit: (input: {
       readonly cwd: string;
       readonly refName: string;
+      readonly remote?: GitVcsDriver.GitWorktreeBaseRemote;
     }) => Effect.Effect<
       { readonly commitSha: string; readonly remoteRefName: string } | null,
       GitCommandError
@@ -387,6 +392,10 @@ export const make = Effect.gen(function* () {
     resolvePullRequest: routeGitManager(
       "GitWorkflowService.resolvePullRequest",
       gitManager.resolvePullRequest,
+    ),
+    previewChangeRequest: routeGitManager(
+      "GitWorkflowService.previewChangeRequest",
+      gitManager.previewChangeRequest,
     ),
     preparePullRequestThread: Effect.fn("GitWorkflowService.preparePullRequestThread")(
       function (input) {
