@@ -4,6 +4,10 @@ import {
   WsSubscribeServerConfigRpc,
   WS_METHODS,
 } from "@t3tools/contracts";
+import {
+  joinSocketFrameParts,
+  SOCKET_FRAME_PARTS_QUERY_PARAM,
+} from "@t3tools/shared/socketFrameParts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";

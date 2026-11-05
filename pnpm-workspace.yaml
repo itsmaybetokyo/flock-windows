@@ -18,14 +18,11 @@ allowBuilds:
   electron: false
   electron-winstaller: false
   esbuild: true
-  msgpackr-extract: true
-  msw: false
   node-pty: true
   # Ships N-API prebuilds; its install script only rebuilds from source.
   objc-js: false
   "react-native-enriched-markdown@file:apps/mobile/deps/react-native-enriched-markdown-1.2.0-t3.16-29ddd424.tgz": true
   sharp: true
-  "@tsc-rs/typescript": true
   utf-8-validate: false
   workerd: false
 
@@ -79,7 +76,6 @@ catalog:
   react-dom: 19.3.0
   tailwindcss: 4.3.3
   tldts: 7.4.2
-  typescript: npm:@tsc-rs/typescript@0.8.0
   undici: 8.11.2
   vite: npm:@voidzero-dev/vite-plus-core@1.4.0
   vite-plus: 1.4.0
@@ -285,19 +281,10 @@ overrides:
   "@anthropic-ai/claude-agent-sdk>@anthropic-ai/claude-agent-sdk-linux-x64-musl": "-"
   "@anthropic-ai/claude-agent-sdk>@anthropic-ai/claude-agent-sdk-win32-arm64": "-"
   "@anthropic-ai/claude-agent-sdk>@anthropic-ai/claude-agent-sdk-win32-x64": "-"
-  # Alchemy's Ink fork declares React as a hard dependency, but the relay only
-  # reaches its terminal-capability helpers; the TUI is never imported, so the
-  # extra React copy is pure install weight.
-  "@alchemy.run/sigil>react": "-"
-  "@alchemy.run/sigil>react-reconciler": "-"
-  "@alchemy.run/sigil>scheduler": "-"
   "@clerk/backend": "catalog:"
   "@clerk/clerk-js": "catalog:"
   "@clerk/clerk-js>@base-org/account": "-"
   "@clerk/clerk-js>@coinbase/wallet-sdk": "-"
-  "@clerk/clerk-js>@solana/wallet-adapter-base": "-"
-  "@clerk/clerk-js>@solana/wallet-adapter-react": "-"
-  "@clerk/clerk-js>@solana/wallet-standard": "-"
   "@clerk/clerk-js>@wallet-standard/core": "-"
   "@clerk/electron": "catalog:"
   "@clerk/electron-passkeys": "catalog:"
@@ -314,10 +301,10 @@ overrides:
   "@expo/dom-webview": 58.0.2
   "@expo/metro-config": 58.0.14
   expo-constants: 58.0.12
-  expo-router: 58.0.20
   "expo-sharing>@expo/config-plugins": 58.0.9
   "expo-sharing>@expo/config-types": 58.0.3
-  "@pierre/diffs>@shikijs/transformers": ^4.2.0
+  # @pierre/trees pins @pierre/theming 1.0.0, whose peer range predates @pierre/theme 2.
+  "@pierre/trees>@pierre/theming": 1.0.2
   # Resolve below remark-math so Vite, Metro and Node use the same tokenizer.
   "remark-math>micromark-extension-math": npm:micromark-extension-llm-math@3.1.0
   micromark-extension-gfm-table: 2.1.1
@@ -335,6 +322,9 @@ overrides:
   "@opencode/protocol>effect": "catalog:"
   "@opencode/schema>effect": "catalog:"
   node-abi: 4.33.0
+  # react-native-worklets peers on any version, so a fresh resolve takes the newest
+  # one; React Native's CLI plugin wants exactly its own. Move with react-native.
+  "@react-native/metro-config": 0.88.0
   # The desktop app installs these without a lockfile when it packages them, so
   # pin the native passkey code that runs in its main process.
   "electron-webauthn>@electron-webauthn/macos": "catalog:"
@@ -407,10 +397,12 @@ patchedDependencies:
   # Observe the owned host exit independently of descendants retaining its stdio.
   "@muse-code/sdk@1.4.6": patches/@muse-code__sdk@1.4.6.patch
   app-builder-lib@26.16.1: patches/app-builder-lib@26.16.1.patch
-  # drizzle-kit fails on an absolute `out`: https://github.com/alchemy-run/alchemy/issues/2980
-  "@alchemy.run/drizzle@2.0.0-beta.85": patches/@alchemy.run__drizzle@2.0.0-beta.85.patch
   # A failed Artifacts.cached effect hangs every later caller: https://github.com/alchemy-run/alchemy/issues/2981
   alchemy@2.0.0-beta.85: patches/alchemy@2.0.0-beta.85.patch
+
+# Unmet peers fail resolution, so a pin outside a dependency's peer range is
+# caught when the lockfile changes instead of scrolling past as a warning.
+strictPeerDependencies: true
 
 peerDependencyRules:
   allowAny:
@@ -418,6 +410,10 @@ peerDependencyRules:
     - vite
   allowedVersions:
     vite: "*"
+    # Our react-native-screens fork is a 5.x prerelease, which ">= 4.0.0" excludes.
+    "@react-navigation/native-stack>react-native-screens": "*"
+    # ws 7 (React Native dev tooling) only calls isValidUTF8, unchanged in v6.
+    "ws@7>utf-8-validate": "6"
 
 # pnpm 12 links agent skills that dependencies ship into .claude/skills once
 # approved. We curate our own skills, so deny these to keep installs quiet.
@@ -434,3 +430,18 @@ permissions:
 # pnpm keeps optional deps inside the virtual store, so hoist it to the root.
 publicHoistPattern:
   - "@cursor/sdk-*"
+
+minimumReleaseAgeExclude:
+  - "@effect/tsgo-darwin-arm64@0.67.1"
+  - "@effect/tsgo-darwin-x64@0.67.1"
+  - "@effect/tsgo-linux-arm64@0.67.1"
+  - "@effect/tsgo-linux-arm@0.67.1"
+  - "@effect/tsgo-linux-x64@0.67.1"
+  - "@effect/tsgo-win32-arm64@0.67.1"
+  - "@effect/tsgo-win32-x64@0.67.1"
+  - "@effect/tsgo@0.67.1"
+  - libdiffy-darwin-arm64@0.1.0
+  - libdiffy-darwin-x64@0.1.0
+  - libdiffy-linux-arm64-gnu@0.1.0
+  - libdiffy-linux-x64-gnu@0.1.0
+  - libdiffy@0.1.0

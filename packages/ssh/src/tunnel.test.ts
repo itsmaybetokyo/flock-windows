@@ -8,6 +8,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
+import * as Schema from "effect/Schema";
 import * as Result from "effect/Result";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
@@ -18,6 +19,8 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as SshAuth from "./auth.ts";
 import { SshCommandError, SshPasswordPromptError } from "./errors.ts";
 import * as SshTunnel from "./tunnel.ts";
+
+const isSshCommandError = Schema.is(SshCommandError);
 
 const makeSuccessfulProcess = (stdout: string) => {
   const stdoutStream = Stream.make(new TextEncoder().encode(stdout));
@@ -202,7 +205,7 @@ describe("ssh tunnel scripts", () => {
         assert.isTrue(Result.isFailure(result));
         if (Result.isFailure(result)) {
           assert.instanceOf(result.failure, SshCommandError);
-          if (result.failure instanceof SshCommandError) {
+          if (isSshCommandError(result.failure)) {
             assert.equal(result.failure.exitCode, 1);
             assert.equal(result.failure.stderr.length, 16_384);
             assert.isTrue(result.failure.stderr.endsWith(diagnostic));
@@ -260,7 +263,7 @@ describe("ssh tunnel scripts", () => {
         assert.isTrue(Result.isFailure(result));
         if (Result.isFailure(result)) {
           assert.instanceOf(result.failure, SshCommandError);
-          if (result.failure instanceof SshCommandError) {
+          if (isSshCommandError(result.failure)) {
             assert.equal(result.failure.exitCode, 255);
             assert.equal(result.failure.stderr, diagnostic);
           }
@@ -286,6 +289,44 @@ describe("ssh tunnel scripts", () => {
       );
       const layer = Layer.mergeAll(
         NodeServices.layer,
+        Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Layer.succeed(HttpClient.HttpClient, recordingHttpClient),
+        Layer.succeed(NetService.NetService, testNetService),
+        SshAuth.SshPasswordPrompt.disabledLayer,
+        SshTunnel.SshEnvironmentManager.layer({ resolveCliRunner: Effect.succeed(ARCHIVE) }),
+      );
+      const target = { alias: "devbox", hostname: "devbox", username: null, port: null };
+      yield* Effect.gen(function* () {
+        const manager = yield* SshTunnel.SshEnvironmentManager;
+        yield* manager.ensureEnvironment(target);
+        yield* manager.ensureEnvironment(target);
+      }).pipe(Effect.provide(layer), Effect.scoped);
+
+      assert.deepStrictEqual(requested, [
+        "/.well-known/t3/environment",
+        "/.well-known/t3/environment",
+      ]);
+    }),
+  );
+
+  it.effect("checks a new and a reused tunnel through the small descriptor, not the web app", () =>
+    Effect.gen(function* () {
+      const requested: Array<string> = [];
+      const spawner = ChildProcessSpawner.make((command) => {
+        const args = commandArgs(command);
+        if (args.includes("-G")) return Effect.succeed(makeSuccessfulProcess(""));
+        if (args.includes("-N")) return Effect.succeed(makeRunningProcess(() => undefined));
+        return Effect.succeed(makeSuccessfulProcess('{"remotePort":3773}\n'));
+      });
+      const recordingHttpClient = HttpClient.make((request) =>
+        Effect.sync(() => {
+          requested.push(new URL(request.url).pathname);
+          return HttpClientResponse.fromWeb(request, new Response("", { status: 200 }));
+        }),
+      );
+      const layer = Layer.mergeAll(
+        NodeServices.layer,
+        NodeCrypto.layer,
         Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Layer.succeed(HttpClient.HttpClient, recordingHttpClient),
         Layer.succeed(NetService.NetService, testNetService),
