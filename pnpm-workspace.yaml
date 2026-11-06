@@ -226,6 +226,14 @@ minimumReleaseAgeExclude:
   - "@pierre/highlights@0.2.0"
   - "@pierre/theming@1.0.2"
   - agent-device@0.21.32
+  - "@effect/tsgo-darwin-arm64@0.67.1"
+  - "@effect/tsgo-darwin-x64@0.67.1"
+  - "@effect/tsgo-linux-arm64@0.67.1"
+  - "@effect/tsgo-linux-arm@0.67.1"
+  - "@effect/tsgo-linux-x64@0.67.1"
+  - "@effect/tsgo-win32-arm64@0.67.1"
+  - "@effect/tsgo-win32-x64@0.67.1"
+  - "@effect/tsgo@0.67.1"
   - libdiffy-darwin-arm64@0.1.0
   - libdiffy-darwin-x64@0.1.0
   - libdiffy-linux-arm64-gnu@0.1.0
@@ -430,18 +438,3 @@ permissions:
 # pnpm keeps optional deps inside the virtual store, so hoist it to the root.
 publicHoistPattern:
   - "@cursor/sdk-*"
-
-minimumReleaseAgeExclude:
-  - "@effect/tsgo-darwin-arm64@0.67.1"
-  - "@effect/tsgo-darwin-x64@0.67.1"
-  - "@effect/tsgo-linux-arm64@0.67.1"
-  - "@effect/tsgo-linux-arm@0.67.1"
-  - "@effect/tsgo-linux-x64@0.67.1"
-  - "@effect/tsgo-win32-arm64@0.67.1"
-  - "@effect/tsgo-win32-x64@0.67.1"
-  - "@effect/tsgo@0.67.1"
-  - libdiffy-darwin-arm64@0.1.0
-  - libdiffy-darwin-x64@0.1.0
-  - libdiffy-linux-arm64-gnu@0.1.0
-  - libdiffy-linux-x64-gnu@0.1.0
-  - libdiffy@0.1.0
