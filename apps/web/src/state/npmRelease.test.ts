@@ -6,9 +6,9 @@ import * as Cause from "effect/Cause";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { vi } from "vite-plus/test";
+import { afterAll, afterEach, describe, vi } from "vite-plus/test";
 
-import { npmReleaseAtom, npmReleaseFailureMessage } from "./npmRelease";
+import { npmReleaseAtom, npmReleaseFailureMessage, npmReleasePublishedAtom } from "./npmRelease";
 import { primaryEnvironmentIdAtom } from "./primaryEnvironment";
 import { serverEnvironment } from "./server";
 
@@ -26,6 +26,26 @@ const version = "0.0.46-nightly.20261012.3021";
 const first = EnvironmentId.make("first");
 const second = EnvironmentId.make("second");
 const decodeServerConfig = Schema.decodeUnknownSync(ServerConfig);
+
+// FetchHttpClient reads globalThis.fetch once and keeps it, so every test shares this mock.
+const fetchMock = vi.fn<typeof fetch>();
+vi.stubGlobal("fetch", fetchMock);
+
+async function settledCheck() {
+  const atom = npmReleasePublishedAtom(version);
+  const registry = AtomRegistry.make();
+  const unmount = registry.mount(atom);
+  try {
+    await vi.waitFor(() => {
+      const result = registry.get(atom);
+      expect(AsyncResult.isInitial(result) || result.waiting).toBe(false);
+    });
+    return registry.get(atom);
+  } finally {
+    unmount();
+    registry.dispose();
+  }
+}
 
 const configFor = (environmentId: EnvironmentId | null, supported = true) =>
   decodeServerConfig({
@@ -130,6 +150,51 @@ it.effect("resolves track metadata through a supporting server when there is no 
     }
   }),
 );
+
+it.effect("does not call an unsupported RPC or fetch public npm for an older primary server", () =>
+  Effect.gen(function* () {
+    const query = setup(false);
+    using fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("Unexpected browser fetch"));
+    const registry = AtomRegistry.make();
+    NodeAssert.ok(
+      Atom.isWritable<EnvironmentId | null, EnvironmentId | null>(primaryEnvironmentIdAtom),
+      "Expected the mocked primary environment atom to be writable.",
+    );
+    registry.set(primaryEnvironmentIdAtom, first);
+    const release = npmReleaseAtom("latest");
+    const unmount = registry.mount(release);
+    try {
+      const error = yield* AtomRegistry.getResult(registry, release).pipe(Effect.flip);
+      expect(npmReleaseFailureMessage(Cause.fail(error))).toContain(
+        "Update it before switching tracks",
+      );
+      expect(query).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      unmount();
+      registry.dispose();
+    }
+  }),
+);
+
+it("only displays the safe release error, not arbitrary transport diagnostics", () => {
+  const error = new ServerNpmReleaseError({ reason: "Install npm on the server's PATH." });
+  expect(npmReleaseFailureMessage(Cause.fail(error))).toBe(error.message);
+  expect(
+    npmReleaseFailureMessage(Cause.fail(new Error("sensitive transport details"))),
+  ).not.toContain("sensitive");
+});
+
+describe("npmReleasePublishedAtom", () => {
+  afterEach(() => {
+    fetchMock.mockReset();
+  });
+
+  afterAll(() => {
+    vi.unstubAllGlobals();
+  });
 
   it("checks the fork's GitHub release without tracing headers", async () => {
     fetchMock.mockImplementation(async () =>

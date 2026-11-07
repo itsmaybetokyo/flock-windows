@@ -47,19 +47,6 @@ export function useEnvironmentScopes(
   return scopes.every((scope) => sessionHasScope(result, scope));
 }
 
-/** Whether the environment's session holds every scope, such as a settings patch requires. */
-export function useEnvironmentScopes(
-  environmentId: EnvironmentId | null,
-  scopes: ReadonlyArray<AuthEnvironmentScope>,
-): boolean {
-  const result = useAtomValue(
-    environmentId === null
-      ? EMPTY_SESSION_STATE_ATOM
-      : environmentSession.sessionStateAtom(environmentId),
-  );
-  return scopes.every((scope) => sessionHasScope(result, scope));
-}
-
 export function sessionHasScope(
   result: AsyncResult.AsyncResult<AuthSessionState, unknown>,
   scope: AuthEnvironmentScope,

@@ -1039,46 +1039,6 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  /** Bound runs share the project checkout; new-thread runs get a worktree from `baseRef`. */
-  const scheduledTaskWorkspaceStrategy = Effect.fn(
-    "OrchestratorMcpService.scheduledTaskWorkspaceStrategy",
-  )(function* (
-    project: { readonly id: ProjectId; readonly workspaceRoot: string },
-    boundToThread: boolean,
-    baseRef: string | undefined,
-  ): Effect.fn.Return<ScheduledTask["workspaceStrategy"], OrchestratorMcpFailure> {
-    if (boundToThread) {
-      if (baseRef !== undefined)
-        return yield* failure(
-          "invalid_request",
-          "`baseRef` applies only to tasks that run in a new thread (bindToCurrentThread=false).",
-        );
-      return { type: "root" };
-    }
-    const strategy = {
-      type: "worktree" as const,
-      baseRef:
-        baseRef ??
-        (yield* gitDriver.resolvePrimaryRemoteName(project.workspaceRoot).pipe(
-          Effect.flatMap((remote) =>
-            gitDriver.resolveDefaultBranchName(project.workspaceRoot, remote),
-          ),
-          Effect.orElseSucceed(() => null),
-        )) ??
-        "main",
-      startFromOrigin: true,
-    };
-    if (baseRef !== undefined)
-      yield* threadLaunch
-        .checkWorktreeBase({ projectId: project.id, workspaceStrategy: strategy })
-        .pipe(
-          Effect.mapError((error) =>
-            failure("invalid_request", `${error.message} Pass a branch that exists there.`),
-          ),
-        );
-    return strategy;
-  });
-
   const projectDefaultModelSelection = (
     project: Effect.Success<ReturnType<typeof requireProject>>,
   ) =>
@@ -2072,8 +2032,8 @@ const make = Effect.gen(function* () {
         projectId,
         threadId: bindToCurrentThread && parent !== undefined ? parent.thread.id : null,
         workspaceStrategy: yield* scheduledTaskWorkspaceStrategy(
-          project,
           bindToCurrentThread,
+          projectId,
           input.baseRef,
         ),
         modelSelection,
@@ -2149,8 +2109,8 @@ const make = Effect.gen(function* () {
           input.bindToCurrentThread === undefined && input.baseRef === undefined
             ? existing.workspaceStrategy
             : yield* scheduledTaskWorkspaceStrategy(
-                yield* requireProject(existing.projectId),
                 threadId !== null,
+                existing.projectId,
                 input.baseRef,
               );
         const upsertInput: ScheduledTaskUpsertInput = {

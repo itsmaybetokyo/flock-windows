@@ -1424,19 +1424,6 @@ export const make = Effect.gen(function* () {
   const awaitSessionEnd: EnvironmentAuth["Service"]["awaitSessionEnd"] = (session) =>
     Effect.raceFirst(
       sessions
-        .awaitInvalidation(session.sessionId)
-        .pipe(
-          Effect.mapError((cause) => new ServerAuthSessionCredentialValidationError({ cause })),
-        ),
-      // Closes the connection even when trust-off revocation has not happened or failed.
-      isTailnetDeviceSubject(session.subject)
-        ? tailnetGate.whenRefused(session.subject)
-        : Effect.never,
-    ).pipe(Effect.withSpan("EnvironmentAuth.awaitSessionEnd"));
-
-  const awaitSessionEnd: EnvironmentAuth["Service"]["awaitSessionEnd"] = (session) =>
-    Effect.raceFirst(
-      sessions
         .awaitInvalidation(session.sessionId, session.proofKeyThumbprint)
         .pipe(
           Effect.mapError((cause) => new ServerAuthSessionCredentialValidationError({ cause })),
