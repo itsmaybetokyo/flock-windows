@@ -19,6 +19,10 @@
       "types": "./src/delimitedPreview.ts",
       "import": "./src/delimitedPreview.ts"
     },
+    "./socketFrameParts": {
+      "types": "./src/socketFrameParts.ts",
+      "import": "./src/socketFrameParts.ts"
+    },
     "./rpcFrameCompression": {
       "types": "./src/rpcFrameCompression.ts",
       "import": "./src/rpcFrameCompression.ts"

@@ -31,6 +31,10 @@
       "types": "./src/diffFuse.ts",
       "default": "./src/diffFuse.ts"
     },
+    "./diffy-rows": {
+      "types": "./src/diffyRows.ts",
+      "default": "./src/diffyRows.ts"
+    },
     "./handoff": {
       "types": "./src/handoff.ts",
       "default": "./src/handoff.ts"
