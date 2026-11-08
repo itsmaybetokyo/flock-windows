@@ -7,6 +7,8 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   DEFAULT_SERVER_SETTINGS,
+  DeviceId,
+  DeviceOperationError,
   EnvironmentId,
   OrchestratorMcpEnvironmentTarget,
   OrchestratorMcpFailure,
@@ -37,7 +39,6 @@ import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as DeviceService from "../device/DeviceService.ts";
 import * as PullRequestReviewGuideService from "../pullRequest/PullRequestReviewGuideService.ts";
 import * as ServerConfig from "../config.ts";
-import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { advertisedJsonSchema } from "./advertisedJsonSchema.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
@@ -1443,8 +1444,7 @@ it.effect(
           ["childToken", scopeFor("childToken", true)],
         ]);
         let memoryEnabled = false;
-        const serverLayer = McpHttpServer.layerMemoryToolkit.pipe(
-          Layer.provideMerge(McpHttpServer.layerMcpTransport),
+        const serverLayer = McpHttpServer.layerMcpTransport(McpHttpServer.layerMemoryToolkit).pipe(
           Layer.provide(
             Layer.mock(McpSessionRegistry.McpSessionRegistry)({
               resolve: (token) => Effect.succeed(scopes.get(token)),
@@ -1458,7 +1458,7 @@ it.effect(
           Layer.provide(
             Layer.mergeAll(
               McpToolAccessTestkit.liveThreadsLayer,
-              SqlitePersistence.layerMemory,
+              Sqlite.layerMemory,
               NodeServices.layer,
             ),
           ),

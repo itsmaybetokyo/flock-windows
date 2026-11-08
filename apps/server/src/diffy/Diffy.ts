@@ -9,7 +9,7 @@ import * as Schema from "effect/Schema";
 import type * as Libdiffy from "libdiffy";
 
 export class DiffyError extends Schema.TaggedError<DiffyError>()("DiffyError", {
-  operation: Schema.Literals(["Diffy.diff", "Diffy.expand"]),
+  operation: Schema.Literals(["Diffy.load", "Diffy.diff", "Diffy.expand"]),
   cause: Schema.Defect(),
 }) {
   override get message(): string {
@@ -46,7 +46,10 @@ const requireForDiffy = NodeModule.createRequire(import.meta.url);
 /** @public */
 export const make = Effect.gen(function* () {
   const load = yield* Effect.cached(
-    Effect.try(() => requireForDiffy("libdiffy") as typeof Libdiffy).pipe(
+    Effect.try({
+      try: () => requireForDiffy("libdiffy") as typeof Libdiffy,
+      catch: (cause) => new DiffyError({ operation: "Diffy.load", cause }),
+    }).pipe(
       Effect.flatMap((module) =>
         module.FORMAT_VERSION === 1
           ? Effect.succeedSome(module)

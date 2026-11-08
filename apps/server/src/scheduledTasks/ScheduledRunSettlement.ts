@@ -1,7 +1,7 @@
 import { CommandId, type RunId, type ThreadId } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
@@ -34,7 +34,7 @@ export const make = Effect.gen(function* () {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const scheduledTasks = yield* ScheduledTaskService.ScheduledTaskService;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   // Set when the event arrives so later events for the thread retry until it can settle.
   const pending = new Map<ThreadId, PendingRun>();
 
@@ -63,7 +63,7 @@ export const make = Effect.gen(function* () {
       yield* orchestrator.dispatch({
         type: "thread.auto-settle",
         commandId: CommandId.make(
-          `server:scheduled-auto-settle:${threadId}:${yield* crypto.randomUUIDv4()}`,
+          `server:scheduled-auto-settle:${threadId}:${yield* random.uuidV4()}`,
         ),
         threadId,
         snapshotAt: thread.updatedAt,

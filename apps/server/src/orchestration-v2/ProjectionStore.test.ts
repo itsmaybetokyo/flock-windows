@@ -6711,7 +6711,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
     }),
   );
 
-  it.effect("counts imported runless history inherited by fork shells", () =>
+  it.effect("counts history inherited by fork shells, but not by side chats", () =>
     Effect.gen(function* () {
       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
       const now = yield* DateTime.now;

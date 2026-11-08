@@ -223,7 +223,13 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   const wakeups = yield* Effect.serviceOption(ConnectionWakeups.ConnectionWakeups);
   const environmentId = supervisor.target.environmentId;
   const openTiming = ConnectionTimings.startThreadOpen(environmentId, threadId); // temp: connection timings
-  const retained = resumeCache?.snapshot;
+  const candidate = resumeCache?.snapshot;
+  const retained =
+    candidate &&
+    Option.isSome(candidate.state.data) &&
+    hasMissingPendingQuestionCard(candidate.state.data.value)
+      ? undefined
+      : candidate;
   const owner = {};
   if (resumeCache) resumeCache.owner = owner;
   const loaded =

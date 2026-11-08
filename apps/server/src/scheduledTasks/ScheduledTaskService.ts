@@ -444,7 +444,9 @@ export const layer = Layer.effect(
     yield* sql`CREATE TABLE IF NOT EXISTS scheduled_task_auto_settle (task_id TEXT PRIMARY KEY)`.pipe(
       Effect.orDie,
     );
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
+    const digest = yield* Digest.Digest;
+    const mac = yield* Mac.Mac;
     const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
     const managedFolders = yield* ManagedProjectFolders.ManagedProjectFolders;
@@ -1359,7 +1361,12 @@ export const layer = Layer.effect(
         lastRunError: existingTask?.lastRunError ?? null,
         runCount: existingTask?.runCount ?? 0,
       };
-      yield* saveTask(task, input.requireExisting === true, webhook).pipe(
+      yield* saveTask(
+        task,
+        input.requireExisting === true,
+        scheduleUnchanged ? existingTask.schedule : null,
+        webhook,
+      ).pipe(
         Effect.andThen(
           task.autoSettle === true
             ? sql`INSERT OR IGNORE INTO scheduled_task_auto_settle (task_id) VALUES (${id})`

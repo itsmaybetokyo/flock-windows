@@ -485,11 +485,16 @@ it.effect("a bound run follows its thread when promotion moves it mid-send", () 
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );
 
-it.effect("keeps auto-settle across saves that omit it and drops it with the task", () =>
+it.effect("refuses saving an enabled task above the policy ceiling", () =>
   Effect.gen(function* () {
     const layer = ScheduledTaskService.layer.pipe(
       Layer.provide(
         Layer.mergeAll(
+          ManagedPolicy.layerTest({
+            schemaVersion: 1,
+            organization: "Example Corp",
+            limits: { maxRuntimeMode: "auto-accept-edits" },
+          }),
           Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
           Layer.mock(ThreadManagementService.ThreadManagementService)({}),
           Layer.mock(SecretRequests.SecretRequests)({}),
@@ -504,10 +509,78 @@ it.effect("keeps auto-settle across saves that omit it and drops it with the tas
     );
     yield* Effect.gen(function* () {
       const service = yield* ScheduledTaskService.ScheduledTaskService;
-      const input = {
-        id: ScheduledTaskId.make("task:auto-settle"),
-        title: "Rebase fork",
-        prompt: "Rebase onto upstream",
+      const save = (enabled: boolean) =>
+        service.upsert({
+          id: ScheduledTaskId.make("task:above-ceiling"),
+          title: "Nightly",
+          prompt: "Check progress",
+          enabled,
+          schedule: { type: "interval", everyMs: 60_000 },
+          projectId: ProjectId.make("project:test"),
+          workspaceStrategy: { type: "root" },
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+        });
+      const refused = yield* save(true).pipe(Effect.flip);
+      assert.equal(refused.message, "Example Corp limits threads to Auto-accept edits.");
+      assert.lengthOf((yield* service.list()).tasks, 0);
+      // A disabled task does not run, so it can still be saved.
+      yield* save(false);
+      assert.lengthOf((yield* service.list()).tasks, 1);
+      // Nor can it be switched back on while its mode is above the ceiling.
+      const reenabled = yield* service
+        .setEnabled({ id: ScheduledTaskId.make("task:above-ceiling"), enabled: true })
+        .pipe(Effect.flip);
+      assert.equal(reenabled.message, "Example Corp limits threads to Auto-accept edits.");
+      // A task bound to a thread runs in that thread's mode, so its own is not checked.
+      yield* service.upsert({
+        id: ScheduledTaskId.make("task:bound"),
+        title: "Follow up",
+        prompt: "Check progress",
+        enabled: true,
+        schedule: { type: "interval", everyMs: 60_000 },
+        projectId: ProjectId.make("project:test"),
+        threadId: ThreadId.make("thread:bound"),
+        workspaceStrategy: { type: "root" },
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      });
+    }).pipe(Effect.provide(layer));
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("a run interrupted right after it reserves the task does not block the next run", () =>
+  Effect.gen(function* () {
+    const launches = yield* Ref.make(0);
+    const layer = ScheduledTaskService.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          ManagedPolicy.layerTest(),
+          Layer.mock(ThreadLaunchService.ThreadLaunchService)({
+            launch: () =>
+              Ref.update(launches, (n) => n + 1).pipe(
+                Effect.as({ threadId: ThreadId.make("thread:launched"), resumed: false } as never),
+              ),
+          }),
+          Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+          Layer.mock(SecretRequests.SecretRequests)({}),
+          Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+            namedProjectsRoot: "/projects",
+            isScratchProject: () => Effect.succeed(false),
+          }),
+          NodeCrypto.layer,
+          Layer.succeed(Scheduler.Scheduler, { register: () => Effect.void }),
+        ),
+      ),
+    );
+    yield* Effect.gen(function* () {
+      const service = yield* ScheduledTaskService.ScheduledTaskService;
+      const { task } = yield* service.upsert({
+        id: ScheduledTaskId.make("task:interrupted-reservation"),
+        title: "Check in",
+        prompt: "Check progress",
         enabled: true,
         schedule: { type: "interval", everyMs: 60_000 },
         projectId: ProjectId.make("project:test"),
@@ -515,18 +588,33 @@ it.effect("keeps auto-settle across saves that omit it and drops it with the tas
         modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
         runtimeMode: "full-access",
         interactionMode: "default",
-      } as const;
-      yield* service.upsert({ ...input, autoSettle: true });
-      const { task } = yield* service.upsert({ ...input, title: "Rebase fork daily" });
-      assert.strictEqual(task.autoSettle, true);
+      });
 
-      yield* service.upsert({ ...input, autoSettle: false });
-      assert.isUndefined((yield* service.list()).tasks[0]?.autoSettle);
+      // The reservation is the first Set.add of the task id; interrupt the run right there.
+      const add = Set.prototype.add;
+      let interrupted = false;
+      const first = yield* Effect.gen(function* () {
+        using _reserve = vi.spyOn(Set.prototype, "add").mockImplementation(function (
+          this: Set<unknown>,
+          value: unknown,
+        ) {
+          const result = add.call(this, value);
+          if (value === task.id && !interrupted) {
+            interrupted = true;
+            Fiber.getCurrent()?.interruptUnsafe();
+          }
+          return result;
+        });
+        return yield* service
+          .runNow({ id: task.id })
+          .pipe(Effect.forkChild, Effect.flatMap(Fiber.await));
+      });
+      assert.isTrue(interrupted);
+      assert.isTrue(Exit.hasInterrupts(first));
 
-      yield* service.upsert({ ...input, autoSettle: true });
-      yield* service.delete({ id: input.id });
-      const { task: recreated } = yield* service.upsert(input);
-      assert.isUndefined(recreated.autoSettle);
+      const second = yield* service.runNow({ id: task.id });
+      assert.equal(second.threadId, ThreadId.make("thread:launched"));
+      assert.equal(yield* Ref.get(launches), 1);
     }).pipe(Effect.provide(layer));
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );

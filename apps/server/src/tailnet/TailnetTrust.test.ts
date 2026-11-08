@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { AuthStandardClientScopes, type ServerSettings } from "@t3tools/contracts";
 import type { TailscaleNode, TailscaleTailnet, TailscaleWhois } from "@t3tools/tailscale";
@@ -20,6 +21,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as SessionStore from "../auth/SessionStore.ts";
 import * as TailnetSessionGate from "../auth/TailnetSessionGate.ts";
 import { TAILNET_DEVICE_SUBJECT_PREFIX, tailnetDeviceSubject } from "../auth/TailnetSessionGate.ts";
+import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as TailnetTrust from "./TailnetTrust.ts";
 import * as TailscaleLocal from "./TailscaleLocal.ts";
 
@@ -149,6 +151,7 @@ const fakeTailscale = (scenario: Scenario, probes: Probes) =>
 /** The real auth stack and gate, so admission and authentication see the same state. */
 const layerAuth = EnvironmentAuth.layer.pipe(
   Layer.provide(TailnetSessionGate.layer),
+  Layer.provide(ManagedPolicy.layerTest()),
   Layer.provideMerge(SqlitePersistence.layerMemory),
   Layer.provide(ServerSecretStore.layer),
   Layer.provide(ServerEnvironment.layerIdentity),
@@ -179,7 +182,7 @@ const layerFor = (scenario: Scenario, probes: Probes) =>
         tailnetTrustLogin: scenario.login ?? "",
       }),
     ),
-    Layer.provide(NodeServices.layer),
+    Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
   );
 
 type TailnetDeps =

@@ -9,6 +9,7 @@ import {
   UsageProviderKind,
 } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
+import { normalizeProviderAccentColor } from "@t3tools/client-runtime/state/provider-instance-display";
 import { limitSeverity } from "@t3tools/client-runtime/usage-ledger";
 import {
   formatDuration,
@@ -109,9 +110,12 @@ export function usePaceMark(timeLeft: number | null) {
 }
 
 function WindowBar({
+  color,
   window,
   now,
 }: {
+  /** An account's chosen accent; otherwise the bar stays neutral. */
+  readonly color: string | null;
   readonly window: ServerProviderUsageWindow;
   readonly now: number;
 }) {
@@ -154,9 +158,12 @@ function WindowBar({
             <div
               className={cn(
                 "absolute inset-y-1.5 left-0 rounded-full",
-                severity === "low" ? "bg-warning" : "bg-foreground/85",
+                severity === "low" ? "bg-warning" : color === null && "bg-foreground/85",
               )}
-              style={{ width: `${remaining}%` }}
+              style={{
+                width: `${remaining}%`,
+                ...(severity === "low" || color === null ? {} : { backgroundColor: color }),
+              }}
             />
           ) : null}
         </div>
@@ -189,14 +196,17 @@ function WindowBar({
 }
 
 export function LimitWindows({
+  accentColor,
   windows,
   now,
   compact = false,
 }: {
+  readonly accentColor?: string | undefined;
   readonly windows: ReadonlyArray<ServerProviderUsageWindow>;
   readonly now: number;
   readonly compact?: boolean;
 }) {
+  const color = normalizeProviderAccentColor(accentColor) ?? null;
   return (
     <div
       className={
@@ -216,7 +226,7 @@ export function LimitWindows({
                 {remainingPercent(window)}% left
               </span>
             </span>
-            <WindowBar window={window} now={now} />
+            <WindowBar color={color} window={window} now={now} />
             <span className="flex items-center gap-2 text-xs whitespace-nowrap text-muted-foreground tabular-nums">
               {pace ? <PaceIcon pace={pace} /> : null}
               <span className="ms-auto shrink-0">{resetsIn ?? ""}</span>

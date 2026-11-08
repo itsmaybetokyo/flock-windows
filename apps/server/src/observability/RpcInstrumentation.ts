@@ -21,6 +21,7 @@ const RPC_AGGREGATES = {
   [ORCHESTRATION_V2_WS_METHODS.getFullThreadDiff]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.getTurnSemanticDiff]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.expandTurnDiffGap]: "orchestration",
+  [ORCHESTRATION_V2_WS_METHODS.getTurnDiffImage]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.searchThreads]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.searchThread]: "orchestration",
   [ORCHESTRATION_V2_WS_METHODS.searchThreadStream]: "orchestration",

@@ -13,8 +13,8 @@ import { expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import * as Deferred from "effect/Deferred";
 import * as Redacted from "effect/Redacted";
 import * as Ref from "effect/Ref";
 
@@ -25,6 +25,7 @@ import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as SessionStore from "./SessionStore.ts";
+import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import {
   TAILNET_DEVICE_SUBJECT_PREFIX,
   TailnetSessionGate,

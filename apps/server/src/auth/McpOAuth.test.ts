@@ -29,6 +29,7 @@ import * as McpOAuth from "./McpOAuth.ts";
 import * as McpOAuthHttp from "./mcpOAuthHttp.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as AuthHttp from "./http.ts";
+import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as TailnetTrust from "../tailnet/TailnetTrust.ts";
 
 class AuthTestApi extends HttpApi.make("environment")

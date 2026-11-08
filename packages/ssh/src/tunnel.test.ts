@@ -272,40 +272,82 @@ describe("ssh tunnel scripts", () => {
     }),
   );
 
-  it.effect("checks a new and a reused tunnel through the small descriptor, not the web app", () =>
+  it.effect.each([
+    {
+      name: "does not ask for a password when the agent cannot sign an accepted key",
+      stderr:
+        'sign_and_send_pubkey: signing failed for ED25519 "/home/julius/.ssh/id_ed25519" from agent: communication with agent failed\r\n' +
+        "julius@devbox: Permission denied (publickey,password).\r\n",
+      expectedPromptAttempts: [],
+    },
+    {
+      name: "asks for a password when signing failure has no agent provenance",
+      stderr:
+        'sign_and_send_pubkey: signing failed for ED25519-CERT "key-cert.pub": agent refused operation\n' +
+        "julius@devbox: Permission denied (publickey,password).\n",
+      expectedPromptAttempts: [1],
+    },
+    {
+      name: "asks for a password when the server rejects every key",
+      stderr: "julius@devbox: Permission denied (publickey,password).\r\n",
+      expectedPromptAttempts: [1],
+    },
+  ])("$name", ({ stderr, expectedPromptAttempts }) =>
     Effect.gen(function* () {
-      const requested: Array<string> = [];
-      const spawner = ChildProcessSpawner.make((command) => {
-        const args = commandArgs(command);
-        if (args.includes("-G")) return Effect.succeed(makeSuccessfulProcess(""));
-        if (args.includes("-N")) return Effect.succeed(makeRunningProcess(() => undefined));
-        return Effect.succeed(makeSuccessfulProcess('{"remotePort":3773}\n'));
-      });
-      const recordingHttpClient = HttpClient.make((request) =>
-        Effect.sync(() => {
-          requested.push(new URL(request.url).pathname);
-          return HttpClientResponse.fromWeb(request, new Response("", { status: 200 }));
-        }),
+      const promptAttempts: Array<number> = [];
+      const spawner = ChildProcessSpawner.make((command) =>
+        Effect.succeed(
+          commandArgs(command).includes("-G")
+            ? makeSuccessfulProcess("")
+            : {
+                ...makeSuccessfulProcess(""),
+                exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(255)),
+                stderr: Stream.make(new TextEncoder().encode(stderr)),
+              },
+        ),
       );
       const layer = Layer.mergeAll(
         NodeServices.layer,
+        NodeCrypto.layer,
         Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
-        Layer.succeed(HttpClient.HttpClient, recordingHttpClient),
+        Layer.succeed(HttpClient.HttpClient, testHttpClient),
         Layer.succeed(NetService.NetService, testNetService),
-        SshAuth.SshPasswordPrompt.disabledLayer,
+        Layer.succeed(
+          SshAuth.SshPasswordPrompt,
+          SshAuth.SshPasswordPrompt.of({
+            isAvailable: true,
+            request: (request) =>
+              Effect.sync(() => {
+                promptAttempts.push(request.attempt);
+                return null;
+              }),
+          }),
+        ),
         SshTunnel.SshEnvironmentManager.layer({ resolveCliRunner: Effect.succeed(ARCHIVE) }),
       );
-      const target = { alias: "devbox", hostname: "devbox", username: null, port: null };
       yield* Effect.gen(function* () {
         const manager = yield* SshTunnel.SshEnvironmentManager;
-        yield* manager.ensureEnvironment(target);
-        yield* manager.ensureEnvironment(target);
+        const result = yield* Effect.result(
+          manager.ensureEnvironment({
+            alias: "devbox",
+            hostname: "devbox",
+            username: null,
+            port: null,
+          }),
+        );
+        assert.isTrue(Result.isFailure(result));
+        assert.deepEqual(promptAttempts, expectedPromptAttempts);
+        if (Result.isFailure(result)) {
+          if (expectedPromptAttempts.length === 0) {
+            assert.instanceOf(result.failure, SshCommandError);
+            if (isSshCommandError(result.failure)) {
+              assert.equal(result.failure.stderr, stderr);
+            }
+          } else {
+            assert.instanceOf(result.failure, SshPasswordPromptError);
+          }
+        }
       }).pipe(Effect.provide(layer), Effect.scoped);
-
-      assert.deepStrictEqual(requested, [
-        "/.well-known/t3/environment",
-        "/.well-known/t3/environment",
-      ]);
     }),
   );
 

@@ -22,6 +22,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as Socket from "effect/socket/Socket";
+import * as TestClock from "effect/testing/TestClock";
 import { deflatingJson } from "@t3tools/shared/rpcFrameDeflate";
 
 import {
@@ -314,7 +315,7 @@ describe("RpcSessionFactory", () => {
       const readyFiber = yield* Effect.forkChild(session.ready);
       const socket = yield* awaitSocket(sockets);
 
-      expect(socket.url).toBe(`${PREPARED.socketUrl}&frameCompression=deflate`);
+      expect(socket.url).toBe(`${PREPARED.socketUrl}&frameCompression=deflate&frameParts=1`);
       socket.open();
       yield* completeInitialConfig(socket);
       yield* Fiber.join(readyFiber);

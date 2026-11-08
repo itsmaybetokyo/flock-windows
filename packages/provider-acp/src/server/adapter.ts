@@ -827,7 +827,6 @@ function negotiatedCapabilities(
 
 interface AcpMcpContext {
   readonly servers: ReadonlyArray<EffectAcpSchema.McpServer>;
-  readonly memory?: boolean;
   readonly acpServers: ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly httpServers: ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly processEnvironment?: NodeJS.ProcessEnv;
@@ -858,7 +857,17 @@ function acpMcpContext(
       },
     ],
     acpServers: [{ type: "acp", name: "t3-code", serverId: "t3-code" }],
-    memory: hasT3Memory(session),
+    httpServers:
+      mcpOverHttp === true
+        ? [
+            {
+              type: "http",
+              name: "t3-code",
+              url: session.endpoint,
+              headers: [{ name: "Authorization", value: session.authorizationHeader }],
+            },
+          ]
+        : [],
     endpoint: session.endpoint,
     authorization: session.authorizationHeader,
     processEnvironment: {
@@ -7866,12 +7875,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         ) {
           const prompt: Array<EffectAcpSchema.ContentBlock> = [];
           const mcpSession = yield* mcpSessions.read(turnInput.threadId);
-          const mcpContext = acpMcpContext(mcpSession, self);
           const instructionState = {
             interactionMode: turnInput.runtimePolicy.interactionMode,
-            hasT3Mcp: mcpContext.servers.length > 0,
+            hasT3Mcp: mcpSession !== undefined,
             hasDeviceTools: mcpSession?.capabilities?.has("device") === true,
-            memory: mcpContext.memory === true,
+            memory: hasT3Memory(mcpSession),
           } satisfies T3AcpInstructionState;
           const previousInstructionState = (yield* Ref.get(promptInstructionStates)).get(sessionId);
           const compactionMarker = (yield* Ref.get(compactionMarkers)).get(sessionId);

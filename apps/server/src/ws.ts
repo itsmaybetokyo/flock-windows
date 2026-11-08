@@ -55,6 +55,7 @@ import {
   OrchestrationGetTurnDiffError,
   OrchestrationGetTurnSemanticDiffError,
   OrchestrationExpandTurnDiffGapError,
+  SemanticDiffError,
   ORCHESTRATION_V2_WS_METHODS,
   ORCHESTRATION_PROTOCOL_QUERY_PARAM,
   CLIENT_CAPABILITIES_QUERY_PARAM,
@@ -1297,19 +1298,23 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
       subagentThreadIds = new Set(yield* threadManagement.listActiveSubagentThreadIds());
 
       const loaded = yield* loadProjectMetadataSnapshot(highWater);
+      // Read before replying: the range is budgeted above, and a prune pass during the read
+      // publishes its boundary first, so the recheck below catches deleted rows.
+      const replayed = yield* applicationEvents
+        .readApplicationEvents({
+          afterSequence: input.afterSequence,
+          throughSequence: highWater,
+          // A row a newer build wrote (e.g. after a downgrade) must not fail
+          // every shell resubscribe. The live tail below resumes from
+          // highWater, so a dropped row never hides later events.
+          skipUnknownEventTypes: true,
+        })
+        .pipe(Stream.filter(filterSubagentTranscript), Stream.runCollect);
+      if (input.afterSequence < (yield* applicationEvents.prunedThroughSequence)) {
+        return yield* fromSnapshot;
+      }
       // Collect the bounded replay so metadata, deltas and the marker share one RPC chunk.
-      const replay = yield* toShellStream(
-        applicationEvents
-          .readApplicationEvents({
-            afterSequence: input.afterSequence,
-            throughSequence: highWater,
-            // A row a newer build wrote (e.g. after a downgrade) must not fail
-            // every shell resubscribe. The live tail below resumes from
-            // highWater, so a dropped row never hides later events.
-            skipUnknownEventTypes: true,
-          })
-          .pipe(Stream.filter(filterSubagentTranscript)),
-      ).pipe(Stream.runCollect);
+      const replay = yield* toShellStream(Stream.fromIterable(replayed)).pipe(Stream.runCollect);
       return composeShellStreamWithEnrichment({
         initial: rpcInitialItems(
           [...shellStreamItemsFromResumeSnapshot(loaded), ...replay],
@@ -2113,6 +2118,14 @@ export const layerWsRpc = (
                 }),
             ),
           ),
+        [ORCHESTRATION_V2_WS_METHODS.getTurnDiffImage]: (input) =>
+          checkpointDiffQuery
+            .getTurnDiffImage(input)
+            .pipe(
+              Effect.mapError(
+                (cause) => new SemanticDiffError({ message: "Failed to read the image", cause }),
+              ),
+            ),
         [ORCHESTRATION_V2_WS_METHODS.searchThread]: (input) =>
           threadManagement
             .searchThread(input)
@@ -3286,6 +3299,15 @@ export const layerWsRpc = (
               // Buffer changes through discovery and the initial snapshot's RPC ACK wait.
               const keybindingsChanges = yield* keybindings.subscribeChanges;
               const settingsChanges = yield* serverSettings.subscribeChanges;
+              const remoteTargets = yield* Effect.forkScoped(remoteOpenTargets.resolveTargets(), {
+                startImmediately: true,
+              });
+              const directResult = yield* Effect.forkScoped(
+                directEndpoints
+                  .resolve()
+                  .pipe(Effect.catchCause(() => directEndpoints.resolveAvailable())),
+                { startImmediately: true },
+              );
               const loaded = yield* loadServerConfig({
                 usageLimitsCommand,
                 workspaceSnapshotsOnDemand,
@@ -3528,8 +3550,9 @@ export const layer = Layer.unwrap(
         );
         const clientAnalyticsProps = readClientAnalyticsProps(request);
         yield* analytics.recordOwners(readClientOwners(request), "client");
+        const reportProfiles = yield* serverBrowser.profileReporter;
         const serialization = requestsFrameCompression(
-          requestUrl.value,
+          url.value,
           request.headers["sec-websocket-extensions"],
         )
           ? Layer.succeed(RpcSerialization.RpcSerialization, deflatingJson)
@@ -3563,7 +3586,13 @@ export const layer = Layer.unwrap(
           return httpEffect;
         }).pipe(
           Effect.provide(
-            layerWsRpc(session, clientAnalyticsProps, serverBrowser).pipe(
+            layerWsRpc(
+              session,
+              clientAnalyticsProps,
+              serverBrowser,
+              reportProfiles,
+              readSettingsClient(url.value),
+            ).pipe(
               Layer.provideMerge(serialization),
               // Handler-context reporters see only request defects, not server-wide defects.
               Layer.provide(DefectReporter.layer),
@@ -3625,7 +3654,7 @@ export const layer = Layer.unwrap(
           sessions.markConnected(session.sessionId),
           () =>
             Effect.raceFirst(
-              rpcWebSocketHttpEffect,
+              framedRpcWebSocketHttpEffect,
               serverAuth.awaitSessionEnd(session).pipe(
                 Effect.as(HttpServerResponse.empty()),
                 Effect.catchIf(EnvironmentAuth.isServerAuthInternalError, (error) =>

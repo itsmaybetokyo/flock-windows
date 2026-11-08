@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
@@ -26,6 +27,7 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ServerHttp from "../http.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
+import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as TailnetHttp from "./http.ts";
 import { TailnetDiscovery } from "./TailnetDiscovery.ts";
 import * as TailnetTrust from "./TailnetTrust.ts";
@@ -78,6 +80,7 @@ const makeLayerRoutes = (tailnetTrustEnabled: boolean, tailscaleRunning: boolean
     Layer.provideMerge(
       EnvironmentAuth.layer.pipe(
         Layer.provide(TailnetSessionGate.layer),
+        Layer.provide(ManagedPolicy.layerTest()),
         Layer.provideMerge(SqlitePersistence.layerMemory),
         Layer.provide(ServerSecretStore.layer),
         Layer.provide(ServerEnvironment.layerIdentity),
@@ -111,7 +114,7 @@ const makeLayerRoutes = (tailnetTrustEnabled: boolean, tailscaleRunning: boolean
     Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-tailnet-http-" })),
     Layer.provideMerge(
       HttpPlatform.layer.pipe(
-        Layer.provideMerge(NodeServices.layer),
+        Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
         Layer.provideMerge(Etag.layerWeak),
       ),
     ),

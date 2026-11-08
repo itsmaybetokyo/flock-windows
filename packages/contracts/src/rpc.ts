@@ -119,6 +119,17 @@ import {
 import {
   OrchestrationExpandTurnDiffGapError,
   OrchestrationGetTurnSemanticDiffError,
+  PullRequestDiffImageInput,
+  PullRequestExpandDiffGapInput,
+  PullRequestSemanticDiffInput,
+  PullRequestSemanticDiffResult,
+  ReviewDiffImageInput,
+  ReviewExpandDiffGapInput,
+  ReviewSemanticDiffInput,
+  ReviewSemanticDiffResult,
+  OrchestrationExpandTurnDiffGapResult,
+  SemanticDiffError,
+  SemanticDiffImageResult,
 } from "./semanticDiff.ts";
 import {
   WorktreeSetupCancelInput,
@@ -1839,6 +1850,15 @@ const WsOrchestrationV2ExpandTurnDiffGapRpc = Rpc.make(
   },
 );
 
+const WsOrchestrationV2GetTurnDiffImageRpc = Rpc.make(
+  ORCHESTRATION_V2_WS_METHODS.getTurnDiffImage,
+  {
+    payload: OrchestrationV2RpcSchemas.getTurnDiffImage.input,
+    success: OrchestrationV2RpcSchemas.getTurnDiffImage.output,
+    error: Schema.Union([SemanticDiffError, EnvironmentAuthorizationError]),
+  },
+);
+
 const WsOrchestrationV2SearchThreadRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.searchThread, {
   payload: OrchestrationV2SearchThreadInput,
   success: OrchestrationV2SearchThreadResult,
@@ -2362,6 +2382,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2GetFullThreadDiffRpc,
   WsOrchestrationV2GetTurnSemanticDiffRpc,
   WsOrchestrationV2ExpandTurnDiffGapRpc,
+  WsOrchestrationV2GetTurnDiffImageRpc,
   WsOrchestrationV2SearchThreadsRpc,
   WsOrchestrationV2SearchThreadRpc,
   WsOrchestrationV2SearchThreadStreamRpc,

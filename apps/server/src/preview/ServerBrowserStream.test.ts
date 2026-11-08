@@ -163,7 +163,7 @@ it.effect("closes an open preview stream when its session ends", () =>
     yield* Queue.offer(output, { _tag: "viewport", width: 1280, height: 800 });
     const browser = ServerBrowser.ServerBrowser.of({
       clearProfile: () => Effect.void,
-      reportProfiles: () => Effect.void,
+      profileReporter: Effect.succeed(() => Effect.void),
       openDownload: () => Effect.succeedNone,
       answerFileChooser: () => Effect.succeed(false),
       attachViewer: () => Effect.succeed({ output, input: () => Effect.void }),

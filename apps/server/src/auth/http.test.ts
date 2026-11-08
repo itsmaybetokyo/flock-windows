@@ -25,6 +25,7 @@ import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as AuthHttp from "./http.ts";
+import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as TailnetTrust from "../tailnet/TailnetTrust.ts";
 
 const DEV_TOKEN = "reusable-dev-auth-token-that-is-long-enough";

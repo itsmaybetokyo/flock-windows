@@ -2707,6 +2707,7 @@ describe("OrchestratorMcpService provider resolution", () => {
           Layer.provide(
             Layer.mergeAll(
               NodeServices.layer,
+              NodeCrypto.layer,
               Layer.mock(ThreadManagementService.ThreadManagementService)({}),
               Layer.mock(RemoteDelegation.RemoteDelegation)({}),
               ServerSettings.layerTest(),

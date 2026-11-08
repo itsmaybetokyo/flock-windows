@@ -13,6 +13,7 @@ import * as ConnectionDriver from "./driver.ts";
 import { BearerConnectionTarget, type PreparedConnection } from "./model.ts";
 import * as ConnectionResolver from "./resolver.ts";
 import * as ConnectionTimings from "./timings.ts";
+import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import * as RpcSession from "../rpc/session.ts";
 
 const BODY = JSON.stringify({ threads: ["a", "b", "c"] });
@@ -73,6 +74,7 @@ describe("ConnectionTimings", () => {
                 }),
             }),
             Layer.succeed(HttpClient.HttpClient, jsonHttpClient),
+            Layer.mock(RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization)({}),
           ),
         ),
       );

@@ -273,7 +273,9 @@ function scheduledTaskSummary(task: ScheduledTask, mayRun: boolean): Orchestrato
     ...(task.workspaceStrategy.type === "worktree"
       ? { baseRef: task.workspaceStrategy.baseRef }
       : {}),
-    ...(task.webhook?.url == null || !mayRun ? {} : { webhookUrl: task.webhook.url }),
+    ...(task.webhook?.url == null || !mayRun || task.blockedByPolicy !== undefined
+      ? {}
+      : { webhookUrl: task.webhook.url }),
     ...(task.webhook === undefined
       ? {}
       : { webhookSignature: task.webhook.hasSecret ? "set" : "none" }),

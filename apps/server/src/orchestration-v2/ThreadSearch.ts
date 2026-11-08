@@ -394,6 +394,7 @@ export const make = Effect.gen(function* () {
         AND projects.deleted_at IS NULL
         AND json_extract(threads.payload_json, '$.lineage.relationshipToParent')
           IS NOT 'subagent'
+        AND json_extract(threads.payload_json, '$.lineage.sideChat') IS NOT 1
         AND (${projectIds} IS NULL
           OR threads.project_id IN (SELECT value FROM json_each(${projectIds})))
     `,
@@ -414,6 +415,7 @@ export const make = Effect.gen(function* () {
         AND ${omittedThreadsCondition(sql, omitted)}
         AND json_extract(threads.payload_json, '$.lineage.relationshipToParent')
           IS NOT 'subagent'
+        AND json_extract(threads.payload_json, '$.lineage.sideChat') IS NOT 1
         AND (${projectIds} IS NULL
           OR threads.project_id IN (SELECT value FROM json_each(${projectIds})))
     `,

@@ -580,7 +580,7 @@ export class EnvironmentAuth extends Context.Service<
     ) => Effect.Effect<AuthenticatedSession, ServerAuthCredentialError | ServerAuthInternalError>;
     /** Completes when a connected session stops being valid: revoked, or no longer admitted by tailnet trust. */
     readonly awaitSessionEnd: (
-      session: Pick<AuthenticatedSession, "sessionId" | "subject">,
+      session: Pick<AuthenticatedSession, "sessionId" | "subject" | "proofKeyThumbprint">,
     ) => Effect.Effect<void, ServerAuthInternalError>;
   }
 >()("t3/auth/EnvironmentAuth") {}
@@ -1420,6 +1420,11 @@ export const make = Effect.gen(function* () {
       ),
       Effect.withSpan("EnvironmentAuth.consumeMcpApprovalCode"),
     );
+
+  yield* revokePairedClientsThePolicyDisallows(managedPolicy, {
+    sessions,
+    pairingLinks: bootstrapCredentials,
+  });
 
   const awaitSessionEnd: EnvironmentAuth["Service"]["awaitSessionEnd"] = (session) =>
     Effect.raceFirst(

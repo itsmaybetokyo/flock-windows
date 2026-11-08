@@ -57,6 +57,7 @@ import {
   formatUsageContractMismatch,
   formatUsd,
   makeWindow,
+  usageSourceMessages,
 } from "@t3tools/shared/usageFormat";
 
 import { cn } from "../../lib/utils";
@@ -644,23 +645,14 @@ function Ledger({
     previous === null || loadingPartial ? null : usageChange(value, usageValue(previous, metric));
   const format = metric === "tokens" ? formatTokens : formatUsd;
   const empty = merged.totalTokens === 0 && merged.costUsd === 0 && !loadingPartial;
-  const sourceMessages = [
-    ...new Set(
-      selectedEnvironments.flatMap(
-        (environment) =>
-          environment.summary?.sources.flatMap((source) =>
-            source.message &&
-            !source.action &&
-            !hiddenProviders.has(source.fingerprint.provider) &&
-            (source.status === "partial" ||
-              source.status === "failed" ||
-              source.fingerprint.provider === "cursor")
-              ? [source.message]
-              : [],
-          ) ?? [],
-      ),
+  const sourceMessages = usageSourceMessages(
+    selectedEnvironments.flatMap(
+      (environment) =>
+        environment.summary?.sources.filter(
+          (source) => !hiddenProviders.has(source.fingerprint.provider),
+        ) ?? [],
     ),
-  ];
+  );
   const shownModels = allModels ? models : models.slice(0, MODELS_SHOWN);
   const periodWord = hourly ? "hour" : "day";
   const premiumProviders = efficiency.speedPremiumProviders.map(providerLabel);

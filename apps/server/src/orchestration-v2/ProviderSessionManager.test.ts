@@ -3934,22 +3934,6 @@ it.effect("ProviderSessionManagerV2 gives a thread memory only while the setting
   }),
 );
 
-it.effect("ProviderSessionManagerV2 gives a thread memory only while the setting is on", () =>
-  Effect.gen(function* () {
-    const on = yield* runBrowserAccessScenario({
-      enableAgentBrowserAccess: true,
-      projectOverride: true,
-      memoryEnabled: true,
-    });
-    const off = yield* runBrowserAccessScenario({
-      enableAgentBrowserAccess: true,
-      projectOverride: true,
-    });
-    assert.isTrue(on?.capabilities?.has("memory"));
-    assert.isFalse(off?.capabilities?.has("memory"));
-  }),
-);
-
 it.effect(
   "ProviderSessionManagerV2 applies project device access independently of browser access",
   () =>
