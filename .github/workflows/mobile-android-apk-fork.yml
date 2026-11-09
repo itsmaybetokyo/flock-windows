@@ -3,6 +3,8 @@ name: Mobile Android APK (Fork)
 # Builds Flock-branded Android APKs on a GitHub runner without EAS or a release
 # keystore. The APK is unsigned; sign it with your own key before installing.
 on:
+  push:
+    branches: [flock/android-apk]
   workflow_dispatch:
     inputs:
       variant:
@@ -31,11 +33,11 @@ permissions:
 
 jobs:
   build:
-    name: Unsigned APK (${{ inputs.variant }}, ${{ inputs.abi }})
+    name: Unsigned APK (${{ inputs.variant || 'production' }}, ${{ inputs.abi || 'arm64-v8a' }})
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
-      APP_VARIANT: ${{ inputs.variant }}
+      APP_VARIANT: ${{ inputs.variant || 'production' }}
       EXPO_NO_GIT_STATUS: "1"
       NODE_OPTIONS: --max-old-space-size=8192
       T3CODE_MOBILE_UPDATES_ENABLED: "0"
@@ -88,7 +90,7 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ inputs.abi }}
+          key: gradle-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ inputs.abi || 'arm64-v8a' }}
 
       - name: Generate Android project
         working-directory: apps/mobile
@@ -104,8 +106,8 @@ jobs:
         run: |
           set -euo pipefail
           args=(app:assembleRelease --no-daemon --stacktrace)
-          if [[ "${{ inputs.abi }}" != "all" ]]; then
-            args+=("-PreactNativeArchitectures=${{ inputs.abi }}")
+          if [[ "${{ inputs.abi || 'arm64-v8a' }}" != "all" ]]; then
+            args+=("-PreactNativeArchitectures=${{ inputs.abi || 'arm64-v8a' }}")
           fi
           ./gradlew "${args[@]}"
 
@@ -123,7 +125,7 @@ jobs:
       - name: Upload unsigned APK
         uses: actions/upload-artifact@v4
         with:
-          name: flock-android-${{ inputs.variant }}-unsigned
+          name: flock-android-${{ inputs.variant || 'production' }}-unsigned
           path: artifacts/*
           if-no-files-found: error
           retention-days: 30
