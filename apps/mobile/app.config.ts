@@ -2,6 +2,7 @@ import type { ExpoConfig } from "expo/config";
 
 import { BRAND_ASSET_PATHS } from "../../scripts/lib/brand-assets.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
+import { withFlockMobileBrand } from "./fork.config.ts";
 
 type AppVariant = "development" | "preview" | "production";
 
@@ -488,4 +489,4 @@ const config: ExpoConfig = {
   },
 };
 
-export default config;
+export default withFlockMobileBrand(config, APP_VARIANT);
