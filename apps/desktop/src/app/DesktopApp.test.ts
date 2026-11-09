@@ -212,7 +212,13 @@ it.effect.each([false, true])(
         Effect.provide(
           Layer.mergeAll(
             Layer.mock(BrowserImport.BrowserImport, {}),
-            Layer.mock(DesktopBackendConfiguration.DesktopBackendConfiguration, {}),
+            Layer.mock(DesktopBackendConfiguration.DesktopBackendConfiguration, {
+              stateDirOwnerPaths: {
+                runtimeStatePath: "",
+                environmentIdPath: "",
+                serverVersion: "",
+              },
+            }),
             Layer.mock(DesktopCliCommand.DesktopCliCommand, {}),
             Layer.mock(DesktopClientSettings.DesktopClientSettings, {}),
             Layer.mock(DesktopConnectionCatalogStore.DesktopConnectionCatalogStore, {}),
