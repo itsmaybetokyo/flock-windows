@@ -13,6 +13,12 @@ name: Sync upstream
 # upstream. The validate step then refuses to push a tree that still has
 # duplicate YAML keys, conflict markers, or a package.json missing something
 # upstream declares.
+#
+# Dependency manifests and pnpm-workspace.yaml are deliberately not fork-owned.
+# Keeping the fork's whole file is how upstream's new dependencies and exports
+# went missing, and the sync then refused to push for days. They take upstream's
+# side and .github/scripts/reconcile-fork-manifests.py merges the fork's own
+# entries back, key by key.
 
 on:
   schedule:
@@ -33,8 +39,15 @@ jobs:
       REPO: ${{ github.repository }}
       UPSTREAM: seatedro/t3code
       BRANCH: rohit/changes
-      # fork-release.yml calls release-desktop.yml, so both stay enabled.
-      KEEP: .github/workflows/sync-upstream.yml .github/workflows/fork-release.yml .github/workflows/release-desktop.yml
+      # fork-release.yml calls release-desktop.yml, so both stay enabled. The
+      # fork's own workflows must be listed too: this step disables everything
+      # else, which is how the fork's mobile previews kept getting switched off.
+      KEEP: >-
+        .github/workflows/sync-upstream.yml
+        .github/workflows/fork-release.yml
+        .github/workflows/release-desktop.yml
+        .github/workflows/mobile-android-apk-fork.yml
+        .github/workflows/mobile-eas-preview-fork.yml
     steps:
       - name: Disable upstream workflows
         env:
@@ -71,7 +84,6 @@ jobs:
             assets/flock/
             apps/desktop/src/app/DesktopEnvironment.ts
             apps/mobile/src/features/settings/environment-maintenance.test.ts
-            apps/server/package.json
             apps/server/src/cli/update.test.ts
             apps/server/src/mcp/OrchestratorMcpService.test.ts
             apps/server/src/provider/agentContextBudget.json
@@ -80,11 +92,7 @@ jobs:
             apps/web/src/components/sidebar/UpdateEverythingDialog.tsx
             apps/web/src/state/npmRelease.test.ts
             apps/web/src/state/npmRelease.ts
-            packages/client-runtime/package.json
-            packages/shared/package.json
             packages/shared/src/cliRelease.ts
-            pnpm-lock.yaml
-            pnpm-workspace.yaml
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -135,6 +143,11 @@ jobs:
               take_side theirs "$path"
             fi
           done < /tmp/conflicts
+
+          # Upstream-owned files that carry fork additions: keep upstream's copy
+          # and merge the fork's extra entries back, key by key.
+          grep -E '(^|/)package\.json$|^apps/mobile/app\.config\.ts$' /tmp/conflicts \
+            | xargs -r python3 .github/scripts/reconcile-fork-manifests.py
 
           git commit --no-edit -q
           echo "changed=true" >> "$GITHUB_OUTPUT"
