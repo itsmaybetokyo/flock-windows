@@ -1,9 +1,9 @@
 name: Fork release
 
 # Builds rohit/changes for this fork and publishes it as a nightly prerelease
-# here: the Windows x64 and arm64 desktop installers (exe + blockmap) and the
-# corresponding CLI archives. Upstream's release.yml only runs in
-# pingdotgg/t3code and needs its runners, relay state and publishing
+# here: the Windows x64 and arm64 desktop installers (exe + blockmap), the
+# corresponding CLI archives, and the signed Android APK. Upstream's release.yml
+# only runs in pingdotgg/t3code and needs its runners, relay state and publishing
 # credentials; this file reuses its per-platform build, release-desktop.yml,
 # without editing it.
 
@@ -190,9 +190,18 @@ jobs:
       launch_check: false
       wsl_runtime: false
 
+  android_apk:
+    name: Android APK
+    needs: [meta]
+    uses: ./.github/workflows/mobile-android-apk-fork.yml
+    secrets: inherit
+    with:
+      variant: production
+      abi: arm64-v8a
+
   release:
     name: Publish GitHub Release
-    needs: [meta, desktop_windows_x64, desktop_windows_arm64]
+    needs: [meta, desktop_windows_x64, desktop_windows_arm64, android_apk]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -227,6 +236,23 @@ jobs:
           merge-multiple: true
           path: release-assets
 
+      - name: Download Android APK
+        uses: actions/download-artifact@v8
+        with:
+          name: flock-android-production-signed
+          path: release-assets/android
+
+      # The APK is built without the release version, so name it here where the
+      # version is known.
+      - name: Name the Android APK for this release
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          mv release-assets/android/flock-android.apk \
+            "release-assets/flock-${VERSION}-android-arm64-v8a.apk"
+          rm -rf release-assets/android
+
       # Each Windows build writes its own channel manifest, so fold the x64 and
       # arm64 copies back into the single nightly.yml electron-updater reads.
       - name: Merge Windows updater manifests
@@ -255,11 +281,11 @@ jobs:
           set -euo pipefail
           cd release-assets
           for required in t3-*-win32-x64.zip t3-*-win32-arm64.zip \
-            *.exe nightly.yml; do
+            *.exe *.apk nightly.yml; do
             compgen -G "$required" > /dev/null || { echo "Missing release asset: $required" >&2; exit 1; }
           done
           shopt -s nullglob
-          archives=(t3-*.zip t3-*.tar.gz)
+          archives=(t3-*.zip t3-*.tar.gz *.apk)
           shopt -u nullglob
           sha256sum "${archives[@]}" > SHA256SUMS
           cat SHA256SUMS
@@ -279,5 +305,6 @@ jobs:
             release-assets/*.blockmap
             release-assets/nightly*.yml
             release-assets/*.tar.gz
+            release-assets/*.apk
             release-assets/SHA256SUMS
           token: ${{ github.token }}

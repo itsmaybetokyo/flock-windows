@@ -1,7 +1,11 @@
 name: Mobile Android APK (Fork)
 
-# Builds Flock-branded Android APKs on a GitHub runner without EAS or a release
-# keystore. The APK is unsigned; sign it with your own key before installing.
+# Builds a Flock-branded Android APK on a GitHub runner and signs it with the
+# fork's release keystore, so the result installs like any store app.
+#
+# Play App Signing keys live inside Google and cannot be used here, so this is
+# the fork's own key. An APK signed with it cannot update a T3 Code installed
+# from Play: uninstall that app first, or install on a device that never had it.
 on:
   workflow_dispatch:
     inputs:
@@ -21,9 +25,30 @@ on:
           - arm64-v8a,x86_64
           - all
         default: arm64-v8a
+  workflow_call:
+    inputs:
+      variant:
+        description: App variant
+        type: string
+        required: false
+        default: production
+      abi:
+        description: Android ABI
+        type: string
+        required: false
+        default: arm64-v8a
+    secrets:
+      ANDROID_KEYSTORE_BASE64:
+        required: true
+      ANDROID_KEYSTORE_PASSWORD:
+        required: true
+      ANDROID_KEY_ALIAS:
+        required: true
+      ANDROID_KEY_PASSWORD:
+        required: true
 
 concurrency:
-  group: mobile-android-apk-fork
+  group: mobile-android-apk-fork-${{ github.workflow }}
   cancel-in-progress: true
 
 permissions:
@@ -31,7 +56,7 @@ permissions:
 
 jobs:
   build:
-    name: Unsigned APK (${{ inputs.variant || 'production' }}, ${{ inputs.abi || 'arm64-v8a' }})
+    name: APK (${{ inputs.variant || 'production' }}, ${{ inputs.abi || 'arm64-v8a' }})
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
@@ -97,7 +122,7 @@ jobs:
       - name: Remove release signing
         run: node .github/scripts/patch-android-unsigned-release.mjs
 
-      - name: Build unsigned release APK
+      - name: Build release APK
         working-directory: apps/mobile/android
         env:
           GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx6g -Dorg.gradle.daemon=false
@@ -109,21 +134,50 @@ jobs:
           fi
           ./gradlew "${args[@]}"
 
+      # Gradle's release output is unsigned here (see the step above), so align
+      # and sign it with the fork keystore before it goes anywhere.
+      - name: Sign the APK
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${KEYSTORE_BASE64:-}" ]]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 is not set; refusing to publish an APK that cannot be installed."
+            exit 1
+          fi
+          build_tools="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n 1)"
+          mkdir -p signing artifacts
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > signing/release.jks
+          unsigned="apps/mobile/android/app/build/outputs/apk/release/app-release-unsigned.apk"
+          "$build_tools/zipalign" -f -p 4 "$unsigned" signing/aligned.apk
+          "$build_tools/apksigner" sign \
+            --ks signing/release.jks \
+            --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass "pass:$STORE_PASSWORD" \
+            --key-pass "pass:$KEY_PASSWORD" \
+            --out artifacts/flock-android.apk \
+            signing/aligned.apk
+          "$build_tools/apksigner" verify --print-certs artifacts/flock-android.apk
+          rm -rf signing
+
       - name: Collect APK
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p artifacts
-          find apps/mobile/android/app/build/outputs/apk/release -name '*.apk' -type f -exec cp {} artifacts/ \;
-          test -n "$(find artifacts -name '*.apk' -type f -print -quit)"
+          test -f artifacts/flock-android.apk
           cd artifacts
           sha256sum *.apk > SHA256SUMS
+          cat SHA256SUMS
           ls -lh
 
-      - name: Upload unsigned APK
+      - name: Upload signed APK
         uses: actions/upload-artifact@v7
         with:
-          name: flock-android-${{ inputs.variant || 'production' }}-unsigned
+          name: flock-android-${{ inputs.variant || 'production' }}-signed
           path: artifacts/*
           if-no-files-found: error
           retention-days: 30
