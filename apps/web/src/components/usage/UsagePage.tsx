@@ -2,7 +2,6 @@ import { useAtomValue } from "@effect/atom-react";
 import { useNavigate } from "@tanstack/react-router";
 import { Atom } from "effect/reactivity";
 import {
-  ProviderDriverKind,
   USAGE_CONTRACT_VERSION,
   type EnvironmentId,
   type UsageProviderKind,
@@ -20,10 +19,7 @@ import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { settlePromise } from "@t3tools/client-runtime/state/runtime";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Cause from "effect/Cause";
-import {
-  cursorKeychainAccessEnvironments,
-  refreshUsageLimits,
-} from "@t3tools/client-runtime/state/usage";
+import { refreshUsageLimits } from "@t3tools/client-runtime/state/usage";
 import {
   updatingProvidersLabel,
   usageEnvironmentProgress,
@@ -97,7 +93,6 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { AppRouteModal, AppRouteModalClose } from "../AppRouteModal";
 import { Skeleton } from "../ui/skeleton";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { selectLimitPresentations, UsageLimitsSection } from "./UsageLimits";
@@ -258,9 +253,6 @@ export function UsagePage() {
   );
   const externalLinks = collectExternalUsageLinks(limitPresentations);
   const limitNotices = collectLimitNotices(limitPresentations);
-  const cursorAccessEnvironments = hiddenProviders.has("cursor")
-    ? []
-    : cursorKeychainAccessEnvironments(selectedEnvironments);
   const refreshProviders = useAtomCommand(serverEnvironment.refreshProviders, {
     reportFailure: false,
   });
@@ -284,7 +276,7 @@ export function UsagePage() {
     setLimitsNow(Date.now());
     setAllLimitsOpen(true);
   };
-  const refreshLimits = (automatic = false, afterPending = false) =>
+  const refreshLimits = (automatic = false) =>
     // Settled so the timestamp still advances when a refresh throws.
     settlePromise(() =>
       Promise.all(
@@ -295,7 +287,6 @@ export function UsagePage() {
               environmentId,
               () => refreshProviders({ environmentId, input: {} }),
               automatic,
-              afterPending,
             );
           }
         }),
@@ -371,19 +362,7 @@ export function UsagePage() {
     if (connectedLimitsEnvironments) autoRefreshLimits();
   }, [connectedLimitsEnvironments]);
 
-  const onCursorEnabled = () => {
-    void refresh();
-    void refreshLimits(false, true);
-  };
-  const cursorPrompt =
-    cursorAccessEnvironments.length > 0 ? (
-      <CursorEnableLimits environments={cursorAccessEnvironments} onEnabled={onCursorEnabled} />
-    ) : null;
-  const hasAllLimits =
-    headlines.length > 0 ||
-    limitNotices.length > 0 ||
-    externalLinks.length > 0 ||
-    cursorPrompt !== null;
+  const hasAllLimits = headlines.length > 0 || limitNotices.length > 0 || externalLinks.length > 0;
 
   const periodToggle = (
     <ToggleGroup
@@ -546,8 +525,6 @@ export function UsagePage() {
                     selectedEnvironments={selectedEnvironments}
                     hiddenProviders={hiddenProviders}
                     refreshingUsage={isRefreshing}
-                    cursorAccessEnvironments={cursorAccessEnvironments}
-                    onCursorEnabled={onCursorEnabled}
                     onSelectModel={selectUsageModel}
                   />
                 )}
@@ -577,7 +554,6 @@ export function UsagePage() {
               selectedEnvironmentIds={selectedEnvironmentIds}
               hiddenProviders={hiddenProviders}
               now={limitsNow}
-              cursorPrompt={cursorPrompt}
             />
           </DialogPanel>
         </DialogPopup>
@@ -607,8 +583,6 @@ function Ledger({
   selectedEnvironments,
   hiddenProviders,
   refreshingUsage,
-  cursorAccessEnvironments,
-  onCursorEnabled,
   onSelectModel,
 }: {
   readonly merged: MergedUsage;
@@ -621,8 +595,6 @@ function Ledger({
   readonly selectedEnvironments: readonly EnvironmentUsageStatus[];
   readonly hiddenProviders: ReadonlySet<UsageProviderKind>;
   readonly refreshingUsage: boolean;
-  readonly cursorAccessEnvironments: readonly EnvironmentUsageStatus[];
-  readonly onCursorEnabled: () => void;
   readonly onSelectModel: (key: string) => void;
 }) {
   const [allModels, setAllModels] = useState(false);
@@ -802,15 +774,6 @@ function Ledger({
                 </span>
               </div>
             ))}
-            {cursorAccessEnvironments.map((environment) => (
-              <CursorEnableRow
-                key={environment.environmentId}
-                environmentId={environment.environmentId}
-                label={environment.label}
-                showEnvironment={selectedEnvironments.length > 1}
-                onEnabled={onCursorEnabled}
-              />
-            ))}
           </div>
 
           <div className="flex min-w-0 flex-col">
@@ -944,127 +907,6 @@ function EfficiencyFigure({
         {aside ? <span className="text-xs text-muted-foreground">{aside}</span> : null}
       </dd>
     </div>
-  );
-}
-
-const CURSOR_KEYCHAIN_COPY = "Requires access to your Cursor login in macOS Keychain.";
-
-function CursorEnableButton({
-  environmentId,
-  label,
-  onEnabled,
-  tooltip,
-  buttonText = "Enable",
-}: {
-  readonly environmentId: EnvironmentId;
-  readonly label: string;
-  readonly onEnabled: () => void;
-  readonly tooltip: boolean;
-  readonly buttonText?: string;
-}) {
-  const updateSettings = useAtomCommand(serverEnvironment.updateSettings, {
-    label: "enable Cursor account usage",
-  });
-  const [pending, setPending] = useState(false);
-  const enable = async () => {
-    setPending(true);
-    const result = await updateSettings({
-      environmentId,
-      input: { patch: { cursorKeychainUsageEnabled: true } },
-    });
-    if (result._tag === "Success") onEnabled();
-    setPending(false);
-  };
-  const button = tooltip ? (
-    <InlineButton
-      disabled={pending}
-      aria-busy={pending}
-      aria-label={`Enable Cursor usage from ${label}`}
-      onClick={() => void enable()}
-    >
-      {buttonText}
-    </InlineButton>
-  ) : (
-    <Button
-      size="sm"
-      variant="outline"
-      disabled={pending}
-      aria-busy={pending}
-      aria-label={`Enable Cursor usage from ${label}`}
-      onClick={() => void enable()}
-    >
-      {buttonText}
-    </Button>
-  );
-  if (!tooltip) return button;
-  return (
-    <Tooltip>
-      <TooltipTrigger render={button} />
-      <TooltipPopup>{CURSOR_KEYCHAIN_COPY}</TooltipPopup>
-    </Tooltip>
-  );
-}
-
-function CursorEnableRow({
-  environmentId,
-  label,
-  showEnvironment,
-  onEnabled,
-}: {
-  readonly environmentId: EnvironmentId;
-  readonly label: string;
-  readonly showEnvironment: boolean;
-  readonly onEnabled: () => void;
-}) {
-  return (
-    <div className="grid h-7.5 grid-cols-[1rem_minmax(0,1fr)_auto] items-center gap-2.5 text-sm">
-      <ProviderMark provider="cursor" className="size-3.5" />
-      <span className="truncate text-foreground">Cursor{showEnvironment ? ` · ${label}` : ""}</span>
-      <CursorEnableButton
-        environmentId={environmentId}
-        label={label}
-        onEnabled={onEnabled}
-        tooltip
-      />
-    </div>
-  );
-}
-
-function CursorEnableLimits({
-  environments,
-  onEnabled,
-}: {
-  readonly environments: readonly EnvironmentUsageStatus[];
-  readonly onEnabled: () => void;
-}) {
-  return (
-    <section className="flex flex-col gap-3">
-      <h2 className="flex items-center gap-2 text-sm font-medium text-foreground">
-        <ProviderInstanceIcon
-          driverKind={ProviderDriverKind.make("cursor")}
-          displayName="Cursor"
-          indicatorBackground="var(--background)"
-          className="size-5"
-          iconClassName="size-4 text-foreground/80"
-        />
-        Cursor
-      </h2>
-      <div className="flex flex-col items-start gap-3 rounded-lg border border-border/60 p-4">
-        <p className="text-xs text-muted-foreground">{CURSOR_KEYCHAIN_COPY}</p>
-        <div className="flex flex-wrap gap-2">
-          {environments.map((environment) => (
-            <CursorEnableButton
-              key={environment.environmentId}
-              environmentId={environment.environmentId}
-              label={environment.label}
-              buttonText={environments.length > 1 ? `Enable on ${environment.label}` : "Enable"}
-              onEnabled={onEnabled}
-              tooltip={false}
-            />
-          ))}
-        </div>
-      </div>
-    </section>
   );
 }
 

@@ -1,5 +1,9 @@
 import { ProviderDriverKind, type UsageProviderKind } from "@t3tools/contracts";
-import { USAGE_PROVIDER_COLORS, USAGE_PROVIDER_ORDER } from "@t3tools/client-runtime/usage-ledger";
+import {
+  USAGE_PROVIDER_COLORS,
+  USAGE_PROVIDER_ORDER,
+  type UsageMetric,
+} from "@t3tools/client-runtime/usage-ledger";
 
 type UsageProviderPresentation = {
   readonly label: string;
@@ -30,3 +34,18 @@ export const PROVIDER_PRESENTATION = Object.fromEntries(
 ) as Record<UsageProviderKind, UsageProviderPresentation>;
 
 export const PROVIDER_ORDER: readonly UsageProviderKind[] = USAGE_PROVIDER_ORDER;
+
+export function rankProvidersByMetric(
+  providers: readonly UsageProviderKind[],
+  totals: readonly {
+    readonly provider: UsageProviderKind;
+    readonly costUsd: number;
+    readonly totalTokens: number;
+  }[],
+  metric: UsageMetric,
+): readonly UsageProviderKind[] {
+  const field = metric === "cost" ? "costUsd" : "totalTokens";
+  const value = (provider: UsageProviderKind) =>
+    totals.find((entry) => entry.provider === provider)?.[field] ?? 0;
+  return providers.toSorted((left, right) => value(right) - value(left));
+}

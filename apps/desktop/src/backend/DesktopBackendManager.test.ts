@@ -124,6 +124,8 @@ interface MakeInstanceInput {
   readonly onReady?: Effect.Effect<void>;
   readonly onShutdown?: Effect.Effect<void>;
   readonly onStateDirOwned?: Effect.Effect<void>;
+  readonly resolveStateDirOwner?: DesktopBackendManager.BackendInstanceSpec["resolveStateDirOwner"];
+  readonly onReadyUrl?: (httpBaseUrl: URL) => Effect.Effect<void>;
   readonly onStartupFailure?: (
     failure: DesktopBackendManager.BackendStartupFailure,
   ) => Effect.Effect<void>;
@@ -183,6 +185,8 @@ function makeTestInstance(input: MakeInstanceInput) {
     label: Effect.succeed("Windows"),
     configResolve: input.configResolve ?? Effect.succeed(input.config ?? baseConfig),
     ...(input.onReady ? { onReady: () => input.onReady! } : {}),
+    ...(input.onReadyUrl ? { onReady: input.onReadyUrl } : {}),
+    ...(input.resolveStateDirOwner ? { resolveStateDirOwner: input.resolveStateDirOwner } : {}),
     ...(input.onShutdown ? { onShutdown: () => input.onShutdown! } : {}),
     ...(input.onStateDirOwned ? { onStateDirOwned: () => input.onStateDirOwned! } : {}),
     ...(input.onPreflightFailed ? { onPreflightFailed: input.onPreflightFailed } : {}),
@@ -717,6 +721,151 @@ describe("DesktopBackendManager", () => {
         yield* TestClock.adjust(Duration.seconds(1));
         const failure = yield* Queue.take(reports);
         assert.equal(failure.reason, "The server started but did not become ready in time.");
+      }).pipe(Effect.provide(TestClock.layer())),
+    ),
+  );
+
+  it.effect("the quit stop deadline waits for a backend that only exits at the force kill", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const spawned = yield* Deferred.make<void>();
+        const teardownStarted = yield* Deferred.make<void>();
+        const teardownFinished = yield* Deferred.make<void>();
+        // The real spawner sends SIGTERM, waits the grace, then SIGKILLs. A backend that
+        // ignores SIGTERM therefore finishes tearing down just after the grace.
+        const instance = yield* makeTestInstance({
+          spawnerLayer: Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make(() =>
+              Effect.gen(function* () {
+                const scope = yield* Scope.Scope;
+                yield* Deferred.succeed(spawned, undefined);
+                yield* Scope.addFinalizer(
+                  scope,
+                  Deferred.succeed(teardownStarted, undefined).pipe(
+                    Effect.andThen(Effect.sleep(Duration.seconds(6))),
+                    Effect.andThen(Deferred.succeed(teardownFinished, undefined)),
+                    Effect.asVoid,
+                  ),
+                );
+                return makeProcess({
+                  exitCode: Deferred.await(teardownFinished).pipe(
+                    Effect.as(ChildProcessSpawner.ExitCode(0)),
+                  ),
+                });
+              }),
+            ),
+          ),
+          httpClientLayer: layerHttpClient(() => Effect.never),
+        });
+        yield* instance.start;
+        yield* Deferred.await(spawned);
+
+        // App quit and the updater stop every backend with this deadline.
+        const quitDone = yield* Deferred.make<void>();
+        const quitFiber = yield* instance
+          .stop({ timeout: DesktopBackendManager.BACKEND_QUIT_STOP_TIMEOUT })
+          .pipe(Effect.andThen(Deferred.succeed(quitDone, undefined)), Effect.forkChild);
+
+        yield* Deferred.await(teardownStarted);
+        // Past the SIGTERM grace but before the force kill lands: quit must still be waiting.
+        yield* TestClock.adjust(Duration.millis(5_500));
+        assert.isFalse(yield* Deferred.isDone(quitDone));
+
+        yield* TestClock.adjust(Duration.millis(500));
+        yield* Fiber.join(quitFiber);
+        assert.isTrue(yield* Deferred.isDone(teardownFinished));
+      }).pipe(Effect.provide(TestClock.layer())),
+    ),
+  );
+
+  it.effect(
+    "attaches to a compatible owner of the state directory and respawns once it stops",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          let startCount = 0;
+          let ownerReachable = true;
+          const readyUrls = yield* Queue.unbounded<string>();
+          const ownerConfig: DesktopBackendManager.DesktopBackendStartConfig = {
+            ...baseConfig,
+            httpBaseUrl: new URL("http://127.0.0.1:3900"),
+            bootstrap: { ...baseConfig.bootstrap, desktopBootstrapToken: "pairing-credential" },
+          };
+          const instance = yield* makeTestInstance({
+            spawnerLayer: Layer.succeed(
+              ChildProcessSpawner.ChildProcessSpawner,
+              ChildProcessSpawner.make(() =>
+                Effect.sync(() => {
+                  startCount += 1;
+                  return makeProcess({
+                    exitCode:
+                      startCount === 1
+                        ? Effect.succeed(
+                            ChildProcessSpawner.ExitCode(SERVER_EXIT_CODE_STATE_DIR_OWNED),
+                          )
+                        : Effect.never,
+                  });
+                }),
+              ),
+            ),
+            httpClientLayer: layerHttpClient((request) =>
+              new URL(request.url).port === "3900" && !ownerReachable
+                ? Effect.never
+                : Effect.succeed(responseForRequest(request, 200)),
+            ),
+            resolveStateDirOwner: () => Effect.succeedSome(ownerConfig),
+            onReadyUrl: (url) => Queue.offer(readyUrls, url.href).pipe(Effect.asVoid),
+            onStateDirOwned: Effect.die("an attachable owner must not be refused"),
+          });
+          yield* instance.start;
+
+          assert.equal(yield* Queue.take(readyUrls), "http://127.0.0.1:3900/");
+          assert.deepEqual(yield* instance.currentConfig, Option.some(ownerConfig));
+          const attached = yield* instance.snapshot;
+          assert.isTrue(attached.ready);
+          assert.isTrue(Option.isNone(attached.activePid));
+
+          ownerReachable = false;
+          yield* TestClock.adjust(Duration.seconds(10));
+          assert.equal(yield* Queue.take(readyUrls), "http://127.0.0.1:3773/");
+          assert.equal(startCount, 2);
+        }).pipe(Effect.provide(TestClock.layer())),
+      ),
+  );
+
+  it.effect("stops watching an attached owner on stop without restarting", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let startCount = 0;
+        const ready = yield* Deferred.make<void>();
+        const instance = yield* makeTestInstance({
+          spawnerLayer: Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make(() =>
+              Effect.sync(() => {
+                startCount += 1;
+                return makeProcess({
+                  exitCode: Effect.succeed(
+                    ChildProcessSpawner.ExitCode(SERVER_EXIT_CODE_STATE_DIR_OWNED),
+                  ),
+                });
+              }),
+            ),
+          ),
+          resolveStateDirOwner: (config) => Effect.succeedSome(config),
+          onReady: Deferred.succeed(ready, undefined).pipe(Effect.asVoid),
+        });
+        yield* instance.start;
+        yield* Deferred.await(ready);
+
+        yield* instance.stop();
+        const stopped = yield* instance.snapshot;
+        assert.isFalse(stopped.desiredRunning);
+        assert.isFalse(stopped.ready);
+        assert.isFalse(stopped.restartScheduled);
+        yield* TestClock.adjust(Duration.minutes(1));
+        assert.equal(startCount, 1);
       }).pipe(Effect.provide(TestClock.layer())),
     ),
   );
