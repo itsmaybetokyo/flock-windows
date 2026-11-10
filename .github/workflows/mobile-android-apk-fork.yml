@@ -1,0 +1,129 @@
+name: Mobile Android APK (Fork)
+
+# Builds Flock-branded Android APKs on a GitHub runner without EAS or a release
+# keystore. The APK is unsigned; sign it with your own key before installing.
+on:
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: App variant
+        type: choice
+        options:
+          - production
+          - preview
+          - development
+        default: production
+      abi:
+        description: Android ABI
+        type: choice
+        options:
+          - arm64-v8a
+          - arm64-v8a,x86_64
+          - all
+        default: arm64-v8a
+
+concurrency:
+  group: mobile-android-apk-fork
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Unsigned APK (${{ inputs.variant || 'production' }}, ${{ inputs.abi || 'arm64-v8a' }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      APP_VARIANT: ${{ inputs.variant || 'production' }}
+      EXPO_NO_GIT_STATUS: "1"
+      NODE_OPTIONS: --max-old-space-size=8192
+      T3CODE_MOBILE_UPDATES_ENABLED: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@t3tools/mobile...
+
+      # Public identifiers only, copied from .env.example so the fork build keeps
+      # T3 Connect working without storing secrets.
+      - name: Resolve public config
+        shell: bash
+        run: |
+          set -euo pipefail
+          value() {
+            local found
+            found="$(sed -n "s/^$1=//p" .env.example | head -n 1)"
+            if [[ -z "$found" ]]; then
+              echo ".env.example is missing $1" >&2
+              exit 1
+            fi
+            printf '%s' "$found"
+          }
+          {
+            echo "T3CODE_CLERK_PUBLISHABLE_KEY=$(value T3CODE_CLERK_PUBLISHABLE_KEY)"
+            echo "T3CODE_CLERK_JWT_TEMPLATE=$(value T3CODE_CLERK_JWT_TEMPLATE)"
+            echo "T3CODE_RELAY_URL=$(value T3CODE_RELAY_URL)"
+          } >> "$GITHUB_ENV"
+
+      - name: Cache Gradle
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ inputs.abi || 'arm64-v8a' }}
+
+      - name: Generate Android project
+        working-directory: apps/mobile
+        run: vp exec expo prebuild --platform android --no-install --clean
+
+      - name: Remove release signing
+        run: node .github/scripts/patch-android-unsigned-release.mjs
+
+      - name: Build unsigned release APK
+        working-directory: apps/mobile/android
+        env:
+          GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx6g -Dorg.gradle.daemon=false
+        run: |
+          set -euo pipefail
+          args=(app:assembleRelease --no-daemon --stacktrace)
+          if [[ "${{ inputs.abi || 'arm64-v8a' }}" != "all" ]]; then
+            args+=("-PreactNativeArchitectures=${{ inputs.abi || 'arm64-v8a' }}")
+          fi
+          ./gradlew "${args[@]}"
+
+      - name: Collect APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          find apps/mobile/android/app/build/outputs/apk/release -name '*.apk' -type f -exec cp {} artifacts/ \;
+          test -n "$(find artifacts -name '*.apk' -type f -print -quit)"
+          cd artifacts
+          sha256sum *.apk > SHA256SUMS
+          ls -lh
+
+      - name: Upload unsigned APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: flock-android-${{ inputs.variant || 'production' }}-unsigned
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 30
