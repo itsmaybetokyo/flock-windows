@@ -64,10 +64,9 @@ const center = async (size, mark) => {
 const foreground = await center(432, await fit(await trimmed(birdsSvg(null)), 288));
 const monochrome = await center(432, await fit(await trimmed(birdsSvg("#000000")), 288));
 const notification = await center(96, await fit(await trimmed(birdsSvg("#FFFFFF")), 72));
-const splash = await sharp(await render(skySvg, 1152))
-  .composite([{ input: await center(1152, await fit(await trimmed(birdsSvg(null)), 460)) }])
-  .png()
-  .toBuffer();
+// Transparent mark, not a gradient tile: the splash config draws this over a solid
+// Flock background, and a baked-in square would show its own edges on Android 11-.
+const splash = await center(1152, await fit(await trimmed(birdsSvg(null)), 460));
 
 await Promise.all([
   sharp(foreground).toFile(join(out, "android-icon-foreground.png")),
