@@ -23,6 +23,11 @@ FORK_PATHS=$(cat <<'EOF'
 .github/workflows/sync-upstream.yml
 assets/flock/
 apps/desktop/src/app/DesktopEnvironment.ts
+apps/mobile/src/components/BrandMark.tsx
+apps/mobile/src/components/CompactBrandTitle.tsx
+apps/mobile/src/components/T3Wordmark.tsx
+apps/mobile/src/components/brandAssets.ts
+apps/mobile/src/lib/mobileBranding.ts
 apps/mobile/src/features/settings/environment-maintenance.test.ts
 apps/server/src/cli/update.test.ts
 apps/server/src/mcp/OrchestratorMcpService.test.ts

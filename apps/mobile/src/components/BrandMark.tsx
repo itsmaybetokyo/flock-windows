@@ -4,15 +4,14 @@ import { View } from "react-native";
 
 import { AppText as Text } from "./ui/AppText";
 import { T3_CODE_BRAND_MARK_SOURCE } from "./brandAssets";
+import { MOBILE_BRAND_NAME, resolveMobileStageLabel } from "../lib/mobileBranding";
 
-const appVariant = Constants.expoConfig?.extra?.appVariant;
-const DEFAULT_STAGE_LABEL =
-  appVariant === "development" ? "Dev" : appVariant === "preview" ? "Preview" : "Beta";
+const stageLabel = resolveMobileStageLabel(Constants.expoConfig?.extra?.appVariant);
 
 export function BrandMark(props: { readonly compact?: boolean; readonly stageLabel?: string }) {
   const compact = props.compact ?? false;
   const iconSize = compact ? 32 : 44;
-  const stageLabel = props.stageLabel ?? DEFAULT_STAGE_LABEL;
+  const resolvedStageLabel = props.stageLabel ?? stageLabel;
 
   return (
     <View className="flex-row items-center gap-3">
@@ -27,12 +26,16 @@ export function BrandMark(props: { readonly compact?: boolean; readonly stageLab
       />
       <View className="gap-1">
         <View className="flex-row items-center gap-2">
-          <Text className="text-lg font-t3-bold tracking-[-0.4px] text-foreground">T3 Code</Text>
-          <View className="rounded-full bg-subtle px-2 py-1">
-            <Text className="text-3xs font-t3-bold tracking-[1.1px] uppercase text-foreground-muted">
-              {stageLabel}
-            </Text>
-          </View>
+          <Text className="text-lg font-t3-bold tracking-[-0.4px] text-foreground">
+            {MOBILE_BRAND_NAME}
+          </Text>
+          {resolvedStageLabel ? (
+            <View className="rounded-full bg-subtle px-2 py-1">
+              <Text className="text-3xs font-t3-bold tracking-[1.1px] uppercase text-foreground-muted">
+                {resolvedStageLabel}
+              </Text>
+            </View>
+          ) : null}
         </View>
         {!compact ? (
           <Text className="text-xs font-medium text-foreground-muted">
