@@ -43,6 +43,7 @@ import {
   PATCH_RENDER_PREFIX_ARGS,
   splitNullSeparatedGitStdoutPaths,
 } from "./GitVcsDriverCore.ts";
+import * as CheckoutCloner from "./CheckoutCloner.ts";
 import {
   parseBatch,
   parseBatchCheck,
@@ -152,6 +153,8 @@ export interface CreateWorktreeOptions {
   /** Null or omitted defers to the checkout's t3.json. */
   readonly submodules?: WorktreeSubmodules | null;
   readonly worktreesDirectory?: string;
+  /** Clone the checkout from the macOS worktree checkout cache. */
+  readonly fastCheckout?: boolean;
 }
 
 export interface GitCommitProgress {
@@ -184,6 +187,11 @@ export interface GitPushResult {
   branch: string;
   upstreamBranch?: string | undefined;
   setUpstream?: boolean | undefined;
+}
+
+export interface GitPushTarget {
+  remoteName: string;
+  branchName: string;
 }
 
 export interface GitRangeContext {
@@ -344,6 +352,11 @@ export class GitVcsDriver extends Context.Service<
       fallbackBranch: string | null,
       options?: { readonly remoteName?: string | null },
     ) => Effect.Effect<GitPushResult, GitCommandError>;
+    /** Where `pushCurrentBranch` would push the checked-out branch; null with no remote or when Git picks. */
+    readonly resolvePushTarget: (
+      cwd: string,
+      current: { readonly branch: string; readonly hasUpstream: boolean },
+    ) => Effect.Effect<GitPushTarget | null, GitCommandError>;
     /** Commits on HEAD that aren't on `baseRef`, newest first. */
     readonly readCommitSubjects: (
       cwd: string,
@@ -421,6 +434,8 @@ export class GitVcsDriver extends Context.Service<
       input: VcsCreateWorktreeInput,
       options?: CreateWorktreeOptions,
     ) => Effect.Effect<VcsCreateWorktreeResult, GitCommandError>;
+    /** Deletes the macOS worktree checkout cache in the background. */
+    readonly clearWorktreeCheckoutCache: Effect.Effect<void>;
     /** Force-updates local `branch` to the primary remote's `ref`. */
     readonly fetchRefIntoBranch: (
       input: GitFetchRefInput & { readonly branch: string },
@@ -905,6 +920,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         "--git-common-dir",
         "--git-path",
         "index",
+        "--show-prefix",
         "--verify",
         "--quiet",
         "HEAD",
@@ -914,19 +930,27 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     const headExists = result.exitCode === 0;
     const headChecked = headExists || result.exitCode === 1;
     const lines = result.stdout.split("\n");
-    const [gitCommonDir = "", indexPath = ""] = lines;
-    if (headChecked && lines.length === (headExists ? 4 : 3) && lines.at(-1) === "") {
+    const [gitCommonDir = "", indexPath = "", prefix = ""] = lines;
+    if (headChecked && lines.length === (headExists ? 5 : 4) && lines.at(-1) === "") {
       return {
         gitCommonDir: gitCommonDir.trim(),
         indexPath: indexPath.trim(),
+        prefix,
         headExists,
       };
     }
     // Git before 2.31 echoes --path-format, and a path containing a newline spans lines.
     // Separate commands read the paths as before and report a failure the same way.
+    const fallbackCommonDir = yield* resolveGitCommonDir(cwd);
+    const prefixResult = yield* execute({
+      operation: VcsProcess.CHECKPOINT_CAPTURE_OPERATION,
+      cwd,
+      args: ["rev-parse", "--show-prefix"],
+    });
     return {
-      gitCommonDir: yield* resolveGitCommonDir(cwd),
+      gitCommonDir: fallbackCommonDir,
       indexPath: undefined,
+      prefix: prefixResult.stdout.replace(/\n$/, ""),
       headExists: headChecked ? headExists : yield* hasHeadCommit(cwd),
     };
   });
@@ -963,7 +987,9 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         "-c",
         "splitIndex.sharedIndexExpire=never",
       ];
-      const { gitCommonDir, indexPath, headExists } = yield* resolveCaptureRepository(input.cwd);
+      const { gitCommonDir, indexPath, prefix, headExists } = yield* resolveCaptureRepository(
+        input.cwd,
+      );
       const indexId = yield* random.uuidV4();
       const tempIndexPath = path.join(gitCommonDir, `t3-checkpoint-index-${indexId}`);
       const hostEnv = yield* HostProcess.Environment;
@@ -1156,7 +1182,12 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           }
         }
 
-        const workspaceIgnored = (yield* filterIgnoredPaths(input.cwd, ["."])).length === 0;
+        // The working-tree root is never ignored. Probe a subdirectory without the trailing slash
+        // Git adds to ".", which a blank or whitespace-only ignore line matches as an empty pattern.
+        const workspaceIgnored =
+          prefix !== "" &&
+          (yield* filterIgnoredPaths(input.cwd, [`../${prefix.slice(0, -1).split("/").at(-1)}`]))
+            .length === 0;
         if (workspaceIgnored) {
           // HEAD omits staged-only paths. Seed just this workspace's additions, keeping
           // unrelated staged changes and the scratch index's sparse flags untouched.
@@ -1700,4 +1731,4 @@ export const make = Effect.gen(function* () {
 });
 
 export const layerVcs = Layer.effect(VcsDriver.VcsDriver, makeVcsDriver);
-export const layer = Layer.effect(GitVcsDriver, make);
+export const layer = Layer.effect(GitVcsDriver, make).pipe(Layer.provide(CheckoutCloner.layer));

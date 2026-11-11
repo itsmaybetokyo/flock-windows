@@ -1,6 +1,8 @@
 import type { ScheduledTaskSchedule } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
+import { scheduleTimeZoneLabel } from "./scheduledTaskTimeZone.ts";
+
 export const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 
 const ONCE_FORMATTER = new Intl.DateTimeFormat(undefined, {
@@ -8,7 +10,11 @@ const ONCE_FORMATTER = new Intl.DateTimeFormat(undefined, {
   timeStyle: "short",
 });
 
-export function scheduleLabel(schedule: ScheduledTaskSchedule): string {
+export function scheduleLabel(
+  schedule: ScheduledTaskSchedule,
+  timeZone?: string,
+  runAt?: string | null,
+): string {
   if (schedule.type === "webhook") return "On webhook";
   if (schedule.type === "once")
     return `Once, ${ONCE_FORMATTER.format(DateTime.toEpochMillis(DateTime.makeUnsafe(schedule.runAt)))}`;
@@ -25,5 +31,6 @@ export function scheduleLabel(schedule: ScheduledTaskSchedule): string {
       : weekdays.length === 5 && weekdays.every((day) => day >= 1 && day <= 5)
         ? "Weekdays"
         : weekdays.map((day) => WEEKDAY_LABELS[day]).join(", ");
-  return `${days} at ${schedule.timeOfDay}`;
+  const zone = scheduleTimeZoneLabel(timeZone, runAt);
+  return `${days} at ${schedule.timeOfDay}${zone === undefined ? "" : ` ${zone}`}`;
 }

@@ -11,8 +11,10 @@ import {
 import {
   formatDuration,
   paceRemainingPercent,
+  resetCreditChoices,
   type LimitAccount,
   type LimitPoolWindow,
+  type ResetCreditChoice,
 } from "@t3tools/shared/usageLimits";
 import {
   ChevronRightIcon,
@@ -57,6 +59,7 @@ function iso(at: number): string {
 }
 
 type Redeemable = LimitAccount & { readonly redeem: NonNullable<LimitAccount["redeem"]> };
+type OnRedeem = (accountKey: string, choice: ResetCreditChoice) => void;
 
 function redeemableAccounts(headline: LimitHeadline): readonly Redeemable[] {
   return headline.pool.accounts.filter(
@@ -87,6 +90,8 @@ export function UsageLimitStrip({
   readonly onOpenProviderSettings: () => void;
 }) {
   const [confirming, setConfirming] = useState<string | null>(null);
+  // Kept after close so the dialog's text survives its exit animation.
+  const [choice, setChoice] = useState<ResetCreditChoice | null>(null);
   const redeemable = headlines.flatMap(redeemableAccounts);
   return (
     <section aria-label="Limits" className="flex flex-col gap-2">
@@ -104,7 +109,10 @@ export function UsageLimitStrip({
               now={now}
               externalLinks={headline.pool.driver === "codex" ? externalLinks : []}
               onOpen={onOpen}
-              onRedeem={setConfirming}
+              onRedeem={(accountKey, next) => {
+                setChoice(next);
+                setConfirming(accountKey);
+              }}
             />
           ))
         )}
@@ -124,6 +132,7 @@ export function UsageLimitStrip({
         <AccountRedeemer
           key={account.key}
           account={account}
+          choice={choice}
           open={confirming === account.key}
           onOpenChange={(open) => setConfirming(open ? account.key : null)}
         />
@@ -143,7 +152,7 @@ function LimitChip({
   readonly now: number;
   readonly externalLinks: readonly UsageExternalLink[];
   readonly onOpen: () => void;
-  readonly onRedeem: (accountKey: string) => void;
+  readonly onRedeem: OnRedeem;
 }) {
   const [open, setOpen] = useState(false);
   const { pool, binding, severity, backAt } = headline;
@@ -216,9 +225,9 @@ function LimitChip({
           headline={headline}
           now={now}
           externalLinks={externalLinks}
-          onRedeem={(accountKey) => {
+          onRedeem={(accountKey, next) => {
             setOpen(false);
-            onRedeem(accountKey);
+            onRedeem(accountKey, next);
           }}
         />
       </PopoverPopup>
@@ -241,7 +250,7 @@ function LimitDetail({
   readonly headline: LimitHeadline;
   readonly now: number;
   readonly externalLinks: readonly UsageExternalLink[];
-  readonly onRedeem: (accountKey: string) => void;
+  readonly onRedeem: OnRedeem;
 }) {
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const { pool, windows, severity, runOut } = headline;
@@ -296,8 +305,9 @@ function LimitDetail({
               key={account.key}
               account={account}
               primary={severity === "out"}
+              now={now}
               showAccount={redeemable.length > 1}
-              onRedeem={() => onRedeem(account.key)}
+              onRedeem={(next) => onRedeem(account.key, next)}
             />
           ))}
           {externalLinks.map((link) => (
@@ -410,56 +420,64 @@ function LimitMeter({
 function CreditRow({
   account,
   primary,
+  now,
   showAccount,
   onRedeem,
 }: {
   readonly account: Redeemable;
   readonly primary: boolean;
+  readonly now: number;
   readonly showAccount: boolean;
-  readonly onRedeem: () => void;
+  readonly onRedeem: (choice: ResetCreditChoice) => void;
 }) {
   const environmentId: EnvironmentId = account.redeem.environmentId;
   const canManage = useEnvironmentScope(environmentId, AuthProvidersManageScope);
-  const count = account.limits.resetCredits?.availableCount ?? 0;
-  return (
-    <div className="flex items-center gap-3">
-      <Button
-        size="sm"
-        variant={primary ? "default" : "outline"}
-        disabled={!canManage}
-        onClick={() => {
-          if (readEnvironmentScope(environmentId, AuthProvidersManageScope)) onRedeem();
-        }}
-      >
-        <TicketIcon aria-hidden />
-        Use reset credit
-      </Button>
-      <span className="truncate text-xs text-muted-foreground tabular-nums">
-        {count} banked
-        {showAccount ? ` · ${account.displayName ?? account.email ?? account.key}` : ""}
-      </span>
-    </div>
-  );
+  const credits = account.limits.resetCredits;
+  if (!credits) return null;
+  return resetCreditChoices(credits, account.redeem.input, now, true)
+    .filter((choice) => choice.availableCount > 0)
+    .map((choice) => (
+      <div key={choice.key} className="flex items-center gap-3">
+        <Button
+          size="sm"
+          variant={primary ? "default" : "outline"}
+          disabled={!canManage}
+          onClick={() => {
+            if (readEnvironmentScope(environmentId, AuthProvidersManageScope)) onRedeem(choice);
+          }}
+        >
+          <TicketIcon aria-hidden />
+          Use reset credit
+        </Button>
+        <span className="truncate text-xs text-muted-foreground tabular-nums">
+          {choice.summary}
+          {showAccount ? ` · ${account.displayName ?? account.email ?? account.key}` : ""}
+        </span>
+      </div>
+    ));
 }
 
 function AccountRedeemer({
   account,
+  choice,
   open,
   onOpenChange,
 }: {
   readonly account: Redeemable;
+  readonly choice: ResetCreditChoice | null;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
 }) {
-  const redeem = useResetCredit(account.redeem.environmentId, account.redeem.input);
+  const redeem = useResetCredit(account.redeem.environmentId);
   return (
     <>
       <ResetCreditDialog
         open={open}
         onOpenChange={onOpenChange}
+        choice={choice}
         onConfirm={() => {
           onOpenChange(false);
-          void redeem.redeem();
+          void redeem.redeem(choice);
         }}
         disabled={!redeem.canManageProviders}
       />
