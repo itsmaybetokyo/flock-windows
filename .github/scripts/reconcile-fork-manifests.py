@@ -21,8 +21,11 @@ SECTIONS = (
     "peerDependencies",
     "optionalDependencies",
     "exports",
+    # Not a manifest field upstream validates, but the fork's own icon export
+    # lives there and upstream's copy of scripts/package.json lacks it.
+    "scripts",
 )
-DEPENDENCY_SECTIONS = SECTIONS[:-1]
+DEPENDENCY_SECTIONS = SECTIONS[:4]
 
 BRANDING_PATH = "apps/mobile/app.config.ts"
 BRANDING_IMPORT = 'import { withFlockMobileBrand } from "./fork.config.ts";'
