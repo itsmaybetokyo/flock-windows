@@ -8,6 +8,7 @@ import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../config.ts";
 import { resolveBaseDir } from "../os-jank.ts";
+import { isProcessAlive, readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
 
 const SparseSettings = Schema.Record(Schema.String, Schema.Unknown);
 type SparseSettings = typeof SparseSettings.Type;
@@ -51,15 +52,32 @@ export class SettingsFileWriteError extends Schema.TaggedError<SettingsFileWrite
 }
 
 const envT3Home = Config.String("T3CODE_HOME").pipe(Config.option);
+const DEV_STATE_PLACEHOLDER_URL = new URL("http://localhost");
+
+const hasLiveServer = (statePath: string) =>
+  readPersistedServerRuntimeState(statePath).pipe(
+    Effect.map((state) => Option.isSome(state) && isProcessAlive(state.value.pid)),
+    Effect.orElseSucceed(() => false),
+  );
 
 /** The server paths for `--base-dir`, else T3CODE_HOME, else the default home. */
 export const resolveCliServerPaths = Effect.fn(function* (explicitBaseDir: Option.Option<string>) {
   const envHome = Option.filter(yield* envT3Home, (value) => value.trim().length > 0);
   const configuredBaseDir = Option.orElse(explicitBaseDir, () => envHome);
   const baseDir = yield* resolveBaseDir(Option.getOrUndefined(configuredBaseDir));
-  return yield* ServerConfig.deriveServerPaths(baseDir, undefined, {
+  const userdataPaths = yield* ServerConfig.deriveServerPaths(baseDir, undefined, {
     baseDirIsExplicit: Option.isSome(configuredBaseDir),
   });
+  // A dev server with an implicit home keeps its state in `dev`; follow it unless a
+  // `userdata` server is running too, the same order `t3 pair` checks.
+  if (
+    Option.isNone(configuredBaseDir) &&
+    !(yield* hasLiveServer(userdataPaths.serverRuntimeStatePath))
+  ) {
+    const devPaths = yield* ServerConfig.deriveServerPaths(baseDir, DEV_STATE_PLACEHOLDER_URL);
+    if (yield* hasLiveServer(devPaths.serverRuntimeStatePath)) return devPaths;
+  }
+  return userdataPaths;
 });
 
 /** Propagate read errors to avoid overwriting unread settings with a sparse file. */

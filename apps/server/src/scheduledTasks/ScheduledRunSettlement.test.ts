@@ -65,6 +65,7 @@ function candidate(
   return {
     id: threadId,
     projectId: PROJECT_ID,
+    lineage: { rootThreadId: threadId, parentThreadId: null, relationshipToParent: null },
     branch: "t3/rebase",
     worktreePath: "/worktrees/rebase",
     pullRequests: [],

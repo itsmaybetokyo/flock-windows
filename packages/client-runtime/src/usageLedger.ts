@@ -304,15 +304,15 @@ export function isBlockedSession(window: LimitPoolWindow): boolean {
   );
 }
 
-export function limitWindowLabel(pool: Pick<LimitPool, "driver">, window: LimitPoolWindow): string {
+export function limitWindowLabel(pool: LimitPool, window: LimitPoolWindow): string {
   return (
-    (pool.driver === "cursor" ? cursorUsageWindowDetails(window.id)?.label : undefined) ??
+    (pool.driver === "cursor" ? cursorUsageWindowDetails(window.id, pool)?.label : undefined) ??
     window.label
   );
 }
 
 /** The window a compact limit chip names after its share left, as in "40% left · week". */
-export function limitWindowNoun(pool: Pick<LimitPool, "driver">, window: LimitPoolWindow): string {
+export function limitWindowNoun(pool: LimitPool, window: LimitPoolWindow): string {
   const label = limitWindowLabel(pool, window);
   if (label === "Session") return "session";
   if (label === "Weekly") return "week";

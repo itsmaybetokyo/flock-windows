@@ -69,6 +69,8 @@ export interface RpcSessionOptions {
   readonly usageLimitSources?: boolean;
   readonly usageLimitsCommand?: boolean;
   readonly providerCatalogsOnDemand?: boolean;
+  readonly providerCatalogDigests?: boolean;
+  readonly providerStatusDeltas?: boolean;
   /** The client has no keyboard shortcuts, so its config skips them. */
   readonly withoutKeybindings?: boolean;
   /** The client has no slash command menu, so its config skips provider commands and skills. */
@@ -188,6 +190,8 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
     ...(options.usageLimitSources === true ? { usageLimitSources: true } : {}),
     ...(options.usageLimitsCommand === true ? { usageLimitsCommand: true } : {}),
     ...(options.providerCatalogsOnDemand === true ? { providerCatalogsOnDemand: true } : {}),
+    ...(options.providerCatalogDigests === true ? { providerCatalogDigests: true } : {}),
+    ...(options.providerStatusDeltas === true ? { providerStatusDeltas: true } : {}),
     ...clientShape,
   };
   // Config state merges the snapshots it fetches back in, so no subscriber needs them broadcast.

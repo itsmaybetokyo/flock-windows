@@ -250,6 +250,7 @@ export const make = Effect.gen(function* () {
       (route) => checkRoute(entry, route, (descriptor) => checked.set(route, descriptor)),
       Effect.fnUntraced(
         function* (route) {
+          yield* reportProgress({ stage: "preparing" });
           const prepared = yield* resolver.prepare(routeEntry(entry, route), checked.get(route));
           yield* ConnectionTimings.markPrepared; // temp: connection timings
           yield* reportProgress({ stage: "opening", prepared });
