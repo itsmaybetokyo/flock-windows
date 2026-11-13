@@ -4,6 +4,11 @@
 
 <h1 align="center">Flock</h1>
 
+a T3 Code fork. Its code comes from [seatedro/t3code](https://github.com/seatedro/t3code), itself a
+fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3code).
+
+---
+
 Flock is an "agent harness control surface". It lets you drive the coding agents on your machine
 from a desktop app, a web app, and an Android app.
 
@@ -90,7 +95,3 @@ vp run dev
 
 The architecture and its constraints start at [docs/internals/overview.md](./docs/internals/overview.md).
 
----
-
-a T3 Code fork. Its code comes from [seatedro/t3code](https://github.com/seatedro/t3code), itself a
-fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3code).
