@@ -1,11 +1,11 @@
 name: Fork release
 
 # Builds rohit/changes for this fork and publishes it as a nightly prerelease
-# here: the Windows x64 and arm64 desktop installers (exe + blockmap), the
-# corresponding CLI archives, and the signed Android APK. Upstream's release.yml
-# only runs in pingdotgg/t3code and needs its runners, relay state and publishing
-# credentials; this file reuses its per-platform build, release-desktop.yml,
-# without editing it.
+# here: the Windows x64 and arm64 desktop installers (exe + blockmap), the Linux
+# x64 and arm64 packages (AppImage + deb), the corresponding CLI archives, and
+# the signed Android APK. Upstream's release.yml only runs in pingdotgg/t3code
+# and needs its runners, relay state and publishing credentials; this file reuses
+# its per-platform build, release-desktop.yml, without editing it.
 
 on:
   push:
@@ -190,6 +190,55 @@ jobs:
       launch_check: false
       wsl_runtime: false
 
+  desktop_linux_x64:
+    name: Desktop Linux x64
+    needs: [meta, build_bundle]
+    uses: ./.github/workflows/release-desktop.yml
+    secrets: inherit
+    with:
+      version: ${{ needs.meta.outputs.version }}
+      ref: ${{ github.sha }}
+      release_channel: nightly
+      relay_client_tracing: false
+      clerk_publishable_key: ${{ needs.meta.outputs.clerk_publishable_key }}
+      clerk_jwt_template: ${{ needs.meta.outputs.clerk_jwt_template }}
+      clerk_cli_oauth_client_id: ${{ needs.meta.outputs.clerk_cli_oauth_client_id }}
+      relay_url: ${{ needs.meta.outputs.relay_url }}
+      label: Linux x64
+      runner: ubuntu-24.04
+      platform: linux
+      target: AppImage
+      arch: x64
+      rust_target: x86_64-unknown-linux-gnu
+      resource_key: linux-x64
+      cli_archive: true
+      launch_check: false
+
+  # node-pty compiles from source on Linux arm64, so it builds on arm64 hardware.
+  desktop_linux_arm64:
+    name: Desktop Linux arm64
+    needs: [meta, build_bundle]
+    uses: ./.github/workflows/release-desktop.yml
+    secrets: inherit
+    with:
+      version: ${{ needs.meta.outputs.version }}
+      ref: ${{ github.sha }}
+      release_channel: nightly
+      relay_client_tracing: false
+      clerk_publishable_key: ${{ needs.meta.outputs.clerk_publishable_key }}
+      clerk_jwt_template: ${{ needs.meta.outputs.clerk_jwt_template }}
+      clerk_cli_oauth_client_id: ${{ needs.meta.outputs.clerk_cli_oauth_client_id }}
+      relay_url: ${{ needs.meta.outputs.relay_url }}
+      label: Linux arm64
+      runner: ubuntu-24.04-arm
+      platform: linux
+      target: AppImage
+      arch: arm64
+      rust_target: aarch64-unknown-linux-gnu
+      resource_key: linux-arm64
+      cli_archive: true
+      launch_check: false
+
   android_apk:
     name: Android APK
     needs: [meta]
@@ -201,7 +250,7 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: [meta, desktop_windows_x64, desktop_windows_arm64, android_apk]
+    needs: [meta, desktop_windows_x64, desktop_windows_arm64, desktop_linux_x64, desktop_linux_arm64, android_apk]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -281,7 +330,8 @@ jobs:
           set -euo pipefail
           cd release-assets
           for required in t3-*-win32-x64.zip t3-*-win32-arm64.zip \
-            *.exe *.apk nightly.yml; do
+            t3-*-linux-x64.tar.gz t3-*-linux-arm64.tar.gz \
+            *.exe *.deb *.AppImage *.apk nightly.yml nightly-linux.yml; do
             compgen -G "$required" > /dev/null || { echo "Missing release asset: $required" >&2; exit 1; }
           done
           shopt -s nullglob
@@ -302,6 +352,8 @@ jobs:
           files: |
             release-assets/*.exe
             release-assets/*.zip
+            release-assets/*.AppImage
+            release-assets/*.deb
             release-assets/*.blockmap
             release-assets/nightly*.yml
             release-assets/*.tar.gz

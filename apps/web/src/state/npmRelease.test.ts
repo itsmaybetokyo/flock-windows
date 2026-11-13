@@ -206,7 +206,7 @@ describe("npmReleasePublishedAtom", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const request = new Request(fetchMock.mock.calls[0]?.[0] ?? "", fetchMock.mock.calls[0]?.[1]);
     expect(request.url).toBe(
-      `https://api.github.com/repos/itsmaybetokyo/flock-windows/releases/tags/v${version}`,
+      `https://api.github.com/repos/itsmaybetokyo/flock/releases/tags/v${version}`,
     );
     expect(request.headers.get("traceparent")).toBeNull();
     expect(request.headers.get("b3")).toBeNull();

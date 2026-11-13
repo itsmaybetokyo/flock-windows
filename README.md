@@ -1,108 +1,96 @@
 <p align="center">
-  <a href="https://t3.codes">
-    <img src="./assets/prod/t3-black-web-icon-192x192.png" width="80" height="80" alt="T3 Code logo" />
-  </a>
+  <img src="assets/flock/flock-universal-1024.png" width="128" height="128" alt="Flock" />
 </p>
 
-<h1 align="center">T3 Code</h1>
+<h1 align="center">Flock</h1>
 
-<p align="center">The open-source control plane for coding agents.</p>
+Flock is an "agent harness control surface". It lets you drive the coding agents on your machine
+from a desktop app, a web app, and an Android app.
 
-<p align="center">
-  <a href="https://t3.codes/download"><strong>Download</strong></a> ·
-  <a href="https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824">iOS</a> ·
-  <a href="https://play.google.com/store/apps/details?id=com.t3tools.t3code">Android</a> ·
-  <a href="https://app.t3.codes">Web</a> ·
-  <a href="./docs/README.md">Docs</a> ·
-  <a href="https://discord.gg/jn4EGJjrvv">Discord</a>
-</p>
+Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCode, Google
+Antigravity, and fx. If they're set up on your computer, Flock can control them.
 
-<p align="center">
-  <a href="https://t3.codes">
-    <img src="./.github/readme/hero.webp" width="100%" alt="T3 Code on desktop with a finished Claude thread, next to the phone app asking to approve a command from Codex" />
-  </a>
-</p>
+## Downloads
 
-T3 Code runs the coding agents on your machine and gives them one fast interface. Start a thread at your desk, then approve the next step from your phone.
+Everything below comes from [Releases](https://github.com/itsmaybetokyo/flock/releases). Nightly
+builds are published as prereleases; grab the newest one and pick your platform.
 
-It works with Claude Code, Codex, Cursor, OpenCode, Grok Build, Antigravity, Kiro, Pi, Muse Code, fx, and any [ACP](./docs/user/providers-acp.md) agent. If an agent is set up on your computer, T3 Code can control it.
+| Platform | Asset |
+| --- | --- |
+| Windows x64 / arm64 | `Flock-<version>-x64.exe` (also `-arm64.exe`) |
+| Linux x64 / arm64 | `Flock-<version>-x86_64.AppImage` / `-arm64.AppImage`, or the matching `.deb` |
+| Android | `flock-<version>-android-arm64-v8a.apk` |
+| Command line | `t3-<version>-<platform>-<arch>.zip` or `.tar.gz` |
 
-## What you get
+The Android APK is signed with this fork's own key, not Google Play's. If T3 Code from the Play
+Store is already installed, uninstall it first; Android refuses an update whose key differs.
 
-- **Your subscriptions.** T3 Code does not resell tokens. It drives the agents you are already signed in to.
-- **Every agent in one place.** Change models in the middle of a thread. Let Claude hand a task to Codex.
-- **Desktop, web, and phone.** One server, and every client shows the same threads. There are apps for iOS and Android.
-- **Remote ready.** Run agents on any machine. Connect over your local network, Tailscale, or [T3 Connect](./docs/user/remote-access.md).
-- **Git built in.** Each thread can work in its own worktree. Review the diff, then commit, push, and open a pull request with one button.
-- **Fast.** Performance is a feature here. We measure it, and we treat a dropped frame as a bug.
-- **Open.** MIT licensed. If you don't like something, fork it.
+The self-contained CLI archives are checked against the `SHA256SUMS` asset on the same release.
 
-## Install
+## Installing the Linux packages
 
-### Desktop app
-
-[Download T3 Code](https://t3.codes/download) for macOS, Windows, or Linux. You can also use a package manager:
-
-| Platform       | Command                                                              |
-| -------------- | -------------------------------------------------------------------- |
-| macOS          | `brew install --cask t3-code`                                        |
-| Windows        | `winget install T3Tools.T3Code` or `scoop install extras/t3code`     |
-| Arch Linux     | `yay -S t3code-bin`                                                  |
-| Nix            | `nix profile add github:NixOS/nixpkgs/nixos-unstable#t3code`         |
-| Debian, Ubuntu | `.deb` from [Releases](https://github.com/pingdotgg/t3code/releases) |
-
-### Command line
-
-This installs the `t3` command. Run `t3` to start the server and open the web app.
+The AppImage runs as-is:
 
 ```bash
-curl -fsSL https://t3.codes/install.sh | sh
+chmod +x Flock-*.AppImage
+./Flock-*.AppImage
 ```
 
-On Windows, in PowerShell:
+The `.deb` installs system-wide:
 
-```powershell
-irm https://t3.codes/install.ps1 | iex
+```bash
+sudo apt install ./Flock-*.deb
 ```
 
-To try it once without an install, run `npx t3@latest`.
+## Install at least one provider
 
-### Phone
+Flock controls a provider; it does not replace one.
 
-Get the app from the [App Store](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824) or [Google Play](https://play.google.com/store/apps/details?id=com.t3tools.t3code). Then follow [remote access](./docs/user/remote-access.md) to connect it to your computer.
+- Codex: install [Codex CLI](https://developers.openai.com/codex/cli) and run `codex login`
+- Claude: install [Claude Code](https://claude.com/product/claude-code) and run `claude auth login`
+- Cursor: install [Cursor CLI](https://cursor.com/cli) and run `agent login`
+- Grok Build: install [Grok Build CLI](https://x.ai/cli) and run `grok login`
+- OpenCode: install [OpenCode](https://opencode.ai) and run `opencode auth login`
+- Antigravity: enable it in Settings, then use **Install Antigravity** and **Sign in with Google**
+- fx: install [fx](https://fx.sh) and run `fx login` on the machine running the Flock server
+  ([setup guide](./docs/user/providers-fx.md))
 
-### Sign in to an agent
+## Following upstream
 
-T3 Code needs one agent that is installed and signed in. For example, install [Claude Code](https://claude.com/product/claude-code) and run `claude auth login`, or install [Codex CLI](https://developers.openai.com/codex/cli) and run `codex login`.
-
-[Provider setup](./docs/user/install.md#providers) has the steps for each agent. [Install T3 Code](./docs/user/install.md) covers nightly builds, AppImage, WSL, and NixOS.
-
-## "Wait, what are you selling me?"
-
-Nothing. We built T3 Code because we wanted the best possible development experience with agents. We were inspired by existing solutions like the Codex desktop app, Conductor, Claude Desktop and Cursor Glass, but none met our bar.
-
-We wanted something performant, remote-ready, and truly open. If we ever go the wrong direction, we want you to have everything you need to fork and build the tool that you want.
+Flock tracks [seatedro/t3code](https://github.com/seatedro/t3code). A daily job merges upstream
+into `rohit/changes` and rebuilds the releases, so upstream's fixes and features arrive without a
+manual rebase. Only the fork's own surface stays local: the Flock icon and name, the signed Android
+APK, and the release workflow.
 
 ## Documentation
 
-- [Install and first run](./docs/user/install.md)
-- [Remote access from a phone or another machine](./docs/user/remote-access.md)
-- [Permission modes](./docs/user/permission-modes.md)
-- [Source control](./docs/user/source-control.md)
-- [Connect outside agents over MCP](./docs/user/outside-agents.md)
+Full docs live in [docs/](./docs).
+
 - [FAQ](./docs/user/faq.md)
+- [Install and first run](./docs/user/install.md)
+- [Permission modes](./docs/user/permission-modes.md)
+- [Keyboard shortcuts](./docs/user/keybindings.md)
+- [Project settings](./docs/user/project-settings.md)
+- [Appearance preferences](./docs/user/appearance.md)
+- [Remote access from a phone or another machine](./docs/user/remote-access.md)
+- [Connect Claude Code, Codex, ChatGPT and other agents over MCP](./docs/user/outside-agents.md)
+- [Keeping app and server in sync](./docs/user/updating.md)
+- [Source control integrations](./docs/user/source-control.md)
+- Multiple accounts: [Codex](./docs/user/providers-codex.md) · [Claude](./docs/user/providers-claude.md)
+- [Run Flock as a background service](./docs/user/background-service.md)
 
-[All docs](./docs/README.md) has the full list.
+## Building from source
 
-## Contributing
+```bash
+curl -fsSL https://vite.plus | bash   # macOS / Linux
+irm https://vite.plus/ps1 | iex       # Windows
+vp i
+vp run dev
+```
 
-We have limited review capacity. Small, focused fixes are the most likely to be merged. Features need an approved discussion first.
+The architecture and its constraints start at [docs/internals/overview.md](./docs/internals/overview.md).
 
-- Read [CONTRIBUTING.md](./CONTRIBUTING.md) before you report a bug or open a pull request.
-- Put feature requests in [Ideas](https://github.com/pingdotgg/t3code/discussions/categories/ideas).
-- Build from source with the [development runbook](./docs/operations/development.md#first-checkout). The [architecture overview](./docs/internals/overview.md) explains how it works.
-- Get help in [Discord](https://discord.gg/jn4EGJjrvv).
+---
 
-## License
-
-[MIT](./LICENSE)
+a T3 Code fork. Its code comes from [seatedro/t3code](https://github.com/seatedro/t3code), itself a
+fork of [pingdotgg/t3code](https://github.com/pingdotgg/t3code).

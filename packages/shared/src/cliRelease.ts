@@ -4,7 +4,7 @@ import * as Schema from "effect/Schema";
 import { compareSemverVersions } from "./semver.ts";
 
 // Fork: `t3 update`, the boot service and installs read this fork's releases.
-const CLI_RELEASE_REPOSITORY: string = "itsmaybetokyo/flock-windows";
+const CLI_RELEASE_REPOSITORY: string = "itsmaybetokyo/flock";
 /** Only upstream's releases are on npm as `t3`; other builds update with `t3 update`. */
 export const CLI_RELEASES_ON_NPM = CLI_RELEASE_REPOSITORY === "pingdotgg/t3code";
 /** @public Fork: Flock mobile (seatedro/flock) imports it. */

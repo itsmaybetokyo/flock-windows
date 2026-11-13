@@ -21,6 +21,7 @@ FORK_PATHS=$(cat <<'EOF'
 .github/workflows/fork-release.yml
 .github/workflows/release-desktop.yml
 .github/workflows/sync-upstream.yml
+README.md
 assets/flock/
 apps/desktop/src/app/DesktopEnvironment.ts
 apps/mobile/src/components/BrandMark.tsx
